@@ -1,0 +1,5 @@
+title,epic,description,priority
+Build the results grid,Search & Explore,"Cards, not rows. Empty state when a search returns nothing.",high
+Add pagination to results,Search & Explore,Page size 20. Keep the current query in the URL.,medium
+Fix the crash when a search returns nothing,Search & Explore,Reproduces on an empty query. Reported against the results grid.,high
+Write the search API docs,Search & Explore,Cover the query parameters and the error responses.,low
