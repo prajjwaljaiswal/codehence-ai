@@ -74,7 +74,12 @@ pub fn find_claude_binary(app_handle: &tauri::AppHandle) -> Result<String, Strin
 
     if installations.is_empty() {
         error!("Could not find claude binary in any location");
-        return Err("Claude Code not found. Please ensure it's installed in one of these locations: PATH, /usr/local/bin, /opt/homebrew/bin, ~/.nvm/versions/node/*/bin, ~/.claude/local, ~/.local/bin".to_string());
+        // The searched locations differ per platform, so listing the Unix
+        // ones on Windows just sends the user looking in the wrong places.
+        #[cfg(windows)]
+        return Err("Claude Code not found. Install it (npm i -g @anthropic-ai/claude-code) so that `claude` is on your PATH, or set the binary path in Settings.".to_string());
+        #[cfg(not(windows))]
+        return Err("Claude Code not found. Please ensure it's installed in one of these locations: PATH, /usr/local/bin, /opt/homebrew/bin, ~/.nvm/versions/node/*/bin, ~/.claude/local, ~/.local/bin — or set the binary path in Settings.".to_string());
     }
 
     // Log all found installations

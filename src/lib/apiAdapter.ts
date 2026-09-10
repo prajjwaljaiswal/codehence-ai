@@ -126,8 +126,19 @@ async function restApiCall<T>(endpoint: string, params?: any): Promise<T> {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
 
+    // Report a non-JSON body as what it is. Letting `response.json()` fail on
+    // an HTML page yields "Unexpected token '<', "<!DOCTYPE "...", which says
+    // nothing about the endpoint that was actually served the wrong thing.
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('json')) {
+      const preview = (await response.text()).slice(0, 120);
+      throw new Error(
+        `Expected JSON from ${processedEndpoint} but got ${contentType || 'an unknown content type'}: ${preview}`
+      );
+    }
+
     const result: ApiResponse<T> = await response.json();
-    
+
     if (!result.success) {
       throw new Error(result.error || 'API call failed');
     }
@@ -146,16 +157,20 @@ export async function apiCall<T>(command: string, params?: any): Promise<T> {
   const isWeb = !detectEnvironment();
   
   if (!isWeb) {
-    // Tauri environment - try invoke
+    // Tauri environment — the invoke result, error included, is final.
+    //
+    // This deliberately does NOT fall back to the REST path on failure. It
+    // used to, which meant every genuine command error (a missing `claude`
+    // binary, a bad path, anything the Rust side rejected) was swallowed and
+    // retried as an HTTP request. In the desktop app that request hits the
+    // bundled SPA instead of a server, so `response.json()` choked on the
+    // returned index.html and surfaced
+    //   Unexpected token '<', "<!DOCTYPE "... is not valid JSON
+    // in place of the real reason — which never reached the user at all.
     console.log(`[Tauri] Calling: ${command}`, params);
-    try {
-      return await invoke<T>(command, params);
-    } catch (error) {
-      console.warn(`[Tauri] invoke failed, falling back to web mode:`, error);
-      // Fall through to web mode
-    }
+    return await invoke<T>(command, params);
   }
-  
+
   // Web environment - use REST API
   console.log(`[Web] Calling: ${command}`, params);
   

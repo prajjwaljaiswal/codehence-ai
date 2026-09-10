@@ -3,7 +3,7 @@ use chrono;
 use dirs;
 use log::{debug, error, info, warn};
 use reqwest;
-use rusqlite::{params, Connection, Result as SqliteResult};
+use rusqlite::{params, Connection, OptionalExtension, Result as SqliteResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::io::{BufRead, BufReader};
@@ -333,8 +333,8 @@ pub fn init_database(app: &AppHandle) -> SqliteResult<Connection> {
 
     // Create trigger to update the updated_at timestamp
     conn.execute(
-        "CREATE TRIGGER IF NOT EXISTS update_app_settings_timestamp 
-         AFTER UPDATE ON app_settings 
+        "CREATE TRIGGER IF NOT EXISTS update_app_settings_timestamp
+         AFTER UPDATE ON app_settings
          FOR EACH ROW
          BEGIN
              UPDATE app_settings SET updated_at = CURRENT_TIMESTAMP WHERE key = NEW.key;
@@ -342,7 +342,117 @@ pub fn init_database(app: &AppHandle) -> SqliteResult<Connection> {
         [],
     )?;
 
+    seed_builtin_agents(&conn)?;
+
     Ok(conn)
+}
+
+/// The agents shipped with the app, embedded at compile time.
+///
+/// These must be baked into the binary rather than read from `cc_agents/` at
+/// runtime: an installed app has no copy of the repository, so a fresh
+/// install would otherwise start with an empty agent list.
+const BUILTIN_AGENTS: &[(&str, &str)] = &[
+    ("planner", include_str!("../../../cc_agents/planner.opcode.json")),
+    (
+        "implementer",
+        include_str!("../../../cc_agents/implementer.opcode.json"),
+    ),
+    ("tester", include_str!("../../../cc_agents/tester.opcode.json")),
+    (
+        "code-reviewer",
+        include_str!("../../../cc_agents/code-reviewer.opcode.json"),
+    ),
+    ("debugger", include_str!("../../../cc_agents/debugger.opcode.json")),
+    (
+        "documenter",
+        include_str!("../../../cc_agents/documenter.opcode.json"),
+    ),
+    (
+        "security-scanner",
+        include_str!("../../../cc_agents/security-scanner.opcode.json"),
+    ),
+    (
+        "unit-tests-bot",
+        include_str!("../../../cc_agents/unit-tests-bot.opcode.json"),
+    ),
+    (
+        "git-commit-bot",
+        include_str!("../../../cc_agents/git-commit-bot.opcode.json"),
+    ),
+];
+
+/// Key recording that the built-in agents have already been installed
+const BUILTIN_AGENTS_SEEDED_KEY: &str = "builtin_agents_seeded_version";
+
+/// Install the bundled agents on first run.
+///
+/// Runs exactly once per database, guarded by a flag in `app_settings`
+/// rather than by "is the agents table empty": these are starting points the
+/// user is expected to edit or delete, and re-seeding would resurrect agents
+/// they deliberately removed. Individual agents are still skipped by name so
+/// a partially-seeded database can't end up with duplicates.
+fn seed_builtin_agents(conn: &Connection) -> SqliteResult<()> {
+    let already_seeded: Option<String> = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            params![BUILTIN_AGENTS_SEEDED_KEY],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    if already_seeded.is_some() {
+        return Ok(());
+    }
+
+    let mut seeded = 0;
+    for (slug, json) in BUILTIN_AGENTS {
+        // A malformed bundled agent must not stop the app from starting, and
+        // must not stop the remaining agents from being installed.
+        let export: AgentExport = match serde_json::from_str(json) {
+            Ok(export) => export,
+            Err(e) => {
+                error!("Skipping built-in agent '{}': invalid JSON: {}", slug, e);
+                continue;
+            }
+        };
+
+        let agent = export.agent;
+
+        let existing: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM agents WHERE name = ?1",
+            params![agent.name],
+            |row| row.get(0),
+        )?;
+        if existing > 0 {
+            continue;
+        }
+
+        conn.execute(
+            "INSERT INTO agents (name, icon, system_prompt, default_task, model, enable_file_read, enable_file_write, enable_network, hooks) \
+             VALUES (?1, ?2, ?3, ?4, ?5, 1, 1, 0, ?6)",
+            params![
+                agent.name,
+                agent.icon,
+                agent.system_prompt,
+                agent.default_task,
+                agent.model,
+                agent.hooks
+            ],
+        )?;
+        seeded += 1;
+    }
+
+    conn.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
+        params![BUILTIN_AGENTS_SEEDED_KEY, "1"],
+    )?;
+
+    if seeded > 0 {
+        info!("Seeded {} built-in agents", seeded);
+    }
+
+    Ok(())
 }
 
 /// List all agents
@@ -1992,5 +2102,154 @@ pub async fn load_agent_session_history(
         Ok(messages)
     } else {
         Err(format!("Session file not found: {}", session_id))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds just the tables `seed_builtin_agents` touches. Mirrors the
+    /// relevant part of `init_database`, which needs an AppHandle and so
+    /// can't run here.
+    fn test_conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE agents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                icon TEXT NOT NULL,
+                system_prompt TEXT NOT NULL,
+                default_task TEXT,
+                model TEXT DEFAULT 'sonnet',
+                enable_file_read BOOLEAN DEFAULT 1,
+                enable_file_write BOOLEAN DEFAULT 1,
+                enable_network BOOLEAN DEFAULT 0,
+                hooks TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "CREATE TABLE app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )
+        .unwrap();
+        conn
+    }
+
+    fn agent_names(conn: &Connection) -> Vec<String> {
+        let mut stmt = conn
+            .prepare("SELECT name FROM agents ORDER BY name")
+            .unwrap();
+        let names = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        names
+    }
+
+    #[test]
+    fn every_bundled_agent_is_valid_and_gets_seeded() {
+        let conn = test_conn();
+        seed_builtin_agents(&conn).unwrap();
+
+        let names = agent_names(&conn);
+        // A parse failure is only logged, so assert on the count to catch a
+        // bundled file that silently stopped being installable.
+        assert_eq!(
+            names.len(),
+            BUILTIN_AGENTS.len(),
+            "every bundled agent should be seeded, got: {names:?}"
+        );
+        assert!(names.contains(&"Tester".to_string()), "got: {names:?}");
+        assert!(names.contains(&"Planner".to_string()), "got: {names:?}");
+
+        // Seeded rows must be usable, not just present
+        let (prompt, model): (String, String) = conn
+            .query_row(
+                "SELECT system_prompt, model FROM agents WHERE name = 'Tester'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(!prompt.trim().is_empty(), "system prompt should be populated");
+        assert_eq!(model, "opus");
+    }
+
+    #[test]
+    fn seeding_is_idempotent_and_respects_deletions() {
+        let conn = test_conn();
+        seed_builtin_agents(&conn).unwrap();
+        let first = agent_names(&conn);
+
+        // Re-running (i.e. every subsequent app launch) changes nothing
+        seed_builtin_agents(&conn).unwrap();
+        assert_eq!(agent_names(&conn), first);
+
+        // An agent the user deleted must stay deleted
+        conn.execute("DELETE FROM agents WHERE name = 'Tester'", [])
+            .unwrap();
+        seed_builtin_agents(&conn).unwrap();
+        assert!(
+            !agent_names(&conn).contains(&"Tester".to_string()),
+            "a deleted agent should not be resurrected"
+        );
+    }
+
+    #[test]
+    fn user_edits_are_not_overwritten() {
+        let conn = test_conn();
+        seed_builtin_agents(&conn).unwrap();
+
+        conn.execute(
+            "UPDATE agents SET system_prompt = 'my own prompt', model = 'sonnet' WHERE name = 'Tester'",
+            [],
+        )
+        .unwrap();
+
+        seed_builtin_agents(&conn).unwrap();
+
+        let (prompt, model): (String, String) = conn
+            .query_row(
+                "SELECT system_prompt, model FROM agents WHERE name = 'Tester'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(prompt, "my own prompt");
+        assert_eq!(model, "sonnet");
+    }
+
+    #[test]
+    fn partially_seeded_database_does_not_duplicate() {
+        let conn = test_conn();
+        // An agent already present, with no seeded flag set — the shape a
+        // database left by an interrupted seed would have
+        conn.execute(
+            "INSERT INTO agents (name, icon, system_prompt, model) VALUES ('Tester', 'beaker', 'existing', 'opus')",
+            [],
+        )
+        .unwrap();
+
+        seed_builtin_agents(&conn).unwrap();
+
+        let tester_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM agents WHERE name = 'Tester'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tester_count, 1, "should not insert a duplicate");
+        assert_eq!(agent_names(&conn).len(), BUILTIN_AGENTS.len());
     }
 }
