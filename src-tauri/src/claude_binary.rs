@@ -8,6 +8,132 @@ use std::path::PathBuf;
 use std::process::Command;
 use tauri::Manager;
 
+// ---------------------------------------------------------------------------
+// Platform differences that decide whether a spawn works at all
+// ---------------------------------------------------------------------------
+
+/// The character PATH is joined with on this platform.
+#[cfg(windows)]
+const PATH_SEPARATOR: &str = ";";
+#[cfg(not(windows))]
+const PATH_SEPARATOR: &str = ":";
+
+/// The extensions Windows will start a file under, when PATHEXT is unreadable.
+#[cfg_attr(not(windows), allow(dead_code))]
+const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";
+
+/// Whether Windows can actually start a file with this name.
+///
+/// `npm i -g @anthropic-ai/claude-code` leaves three shims side by side in
+/// `%APPDATA%\npm`: `claude` (a POSIX sh script), `claude.ps1`, and
+/// `claude.cmd`. Only the last is launchable, and `where claude` lists the
+/// extensionless script *first* - so taking the first line hands back a file
+/// that fails to spawn with "%1 is not a valid Win32 application" (os error
+/// 193). That is what an agent run which dies in 0.00s with no output hit.
+///
+/// Takes PATHEXT as an argument so it can be tested away from Windows, which
+/// is where this logic is hardest to exercise and easiest to get wrong.
+#[cfg_attr(all(not(windows), not(test)), allow(dead_code))]
+fn has_launchable_extension(path: &str, pathext: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    pathext
+        .to_ascii_lowercase()
+        .split(';')
+        .map(str::trim)
+        .filter(|ext| !ext.is_empty())
+        .any(|ext| lower.ends_with(ext))
+}
+
+/// Pick the first line of `where` output that Windows could start, and report
+/// the ones passed over so the log says why.
+#[cfg_attr(all(not(windows), not(test)), allow(dead_code))]
+fn first_launchable(where_output: &str, pathext: &str) -> (Option<String>, Vec<String>) {
+    let mut skipped = Vec::new();
+    for line in where_output.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        if has_launchable_extension(line, pathext) {
+            return (Some(line.to_string()), skipped);
+        }
+        skipped.push(line.to_string());
+    }
+    (None, skipped)
+}
+
+/// Whether this environment variable should reach the child process.
+///
+/// The child is Claude Code, which needs to find Node, its own config, and the
+/// network. The lists differ per platform and getting the Windows one wrong is
+/// not a degraded experience but a hard failure: a process started without
+/// `SystemRoot` cannot initialise winsock, and one without `APPDATA` /
+/// `USERPROFILE` cannot find `~/.claude`.
+fn should_inherit(key: &str) -> bool {
+    const SHARED: &[&str] = &[
+        "PATH",
+        "LANG",
+        "LC_ALL",
+        "NODE_PATH",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "ALL_PROXY",
+    ];
+    #[cfg(windows)]
+    const PLATFORM: &[&str] = &[
+        // Without these two, CreateProcess and winsock fail in ways that look
+        // like Claude itself crashing.
+        "SystemRoot",
+        "windir",
+        "ComSpec",
+        // Resolving `claude.cmd` and `~/.claude` needs all of these.
+        "PATHEXT",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "TEMP",
+        "TMP",
+        "PROGRAMFILES",
+        "PROGRAMFILES(X86)",
+        "PROGRAMDATA",
+        "NUMBER_OF_PROCESSORS",
+        "PROCESSOR_ARCHITECTURE",
+        "OS",
+    ];
+    #[cfg(not(windows))]
+    const PLATFORM: &[&str] = &[
+        "HOME",
+        "USER",
+        "SHELL",
+        "NVM_DIR",
+        "NVM_BIN",
+        "HOMEBREW_PREFIX",
+        "HOMEBREW_CELLAR",
+    ];
+
+    // Windows environment names are case-insensitive, so `Path` and `PATH` are
+    // the same variable and either spelling has to match.
+    SHARED.iter().chain(PLATFORM).any(|known| known.eq_ignore_ascii_case(key))
+        || key.starts_with("LC_")
+}
+
+/// A `Command` for `program` that this platform can actually start.
+///
+/// On Windows this also suppresses the console window that would otherwise
+/// flash up for every spawn, including the version probes done at startup.
+pub fn command_for(program: &str) -> Command {
+    // `mut` is only needed for the Windows creation flag below.
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        /// Do not allocate a console for the child.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 /// Type of Claude installation
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum InstallationType {
@@ -227,12 +353,21 @@ fn try_which_command() -> Option<ClaudeInstallation> {
                 return None;
             }
 
-            // On Windows, `where` can return multiple paths, newline-separated. We take the first one.
-            let path = output_str.lines().next().unwrap_or("").trim().to_string();
+            // `where` returns every match, newline-separated, and lists the
+            // extensionless npm shim before the `.cmd` that can actually be
+            // launched - so this takes the first launchable line, not the
+            // first line.
+            let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| DEFAULT_PATHEXT.to_string());
+            let (path, skipped) = first_launchable(&output_str, &pathext);
 
-            if path.is_empty() {
-                return None;
+            if !skipped.is_empty() {
+                debug!(
+                    "'where' returned shims Windows cannot start, passing over them: {:?}",
+                    skipped
+                );
             }
+
+            let path = path?;
 
             debug!("'where' found claude at: {}", path);
 
@@ -417,7 +552,7 @@ fn find_standard_installations() -> Vec<ClaudeInstallation> {
     }
 
     // Also check if claude is available in PATH (without full path)
-    if let Ok(output) = Command::new("claude").arg("--version").output() {
+    if let Ok(output) = command_for("claude").arg("--version").output() {
         if output.status.success() {
             debug!("claude is available in PATH");
             let version = extract_version_from_output(&output.stdout);
@@ -485,18 +620,22 @@ fn find_standard_installations() -> Vec<ClaudeInstallation> {
         }
     }
 
-    // Also check if claude is available in PATH (without full path)
-    if let Ok(output) = Command::new("claude.exe").arg("--version").output() {
-        if output.status.success() {
-            debug!("claude.exe is available in PATH");
-            let version = extract_version_from_output(&output.stdout);
+    // Also check whether claude is on PATH under either name it ships as. An
+    // npm global install has no `claude.exe` at all - only `claude.cmd` - so
+    // probing for the executable alone misses the most common install.
+    for name in ["claude.cmd", "claude.exe"] {
+        if let Ok(output) = command_for(name).arg("--version").output() {
+            if output.status.success() {
+                debug!("{} is available in PATH", name);
+                let version = extract_version_from_output(&output.stdout);
 
-            installations.push(ClaudeInstallation {
-                path: "claude.exe".to_string(),
-                version,
-                source: "PATH".to_string(),
-                installation_type: InstallationType::System,
-            });
+                installations.push(ClaudeInstallation {
+                    path: name.to_string(),
+                    version,
+                    source: "PATH".to_string(),
+                    installation_type: InstallationType::System,
+                });
+            }
         }
     }
 
@@ -505,7 +644,7 @@ fn find_standard_installations() -> Vec<ClaudeInstallation> {
 
 /// Get Claude version by running --version command
 fn get_claude_version(path: &str) -> Result<Option<String>, String> {
-    match Command::new(path).arg("--version").output() {
+    match command_for(path).arg("--version").output() {
         Ok(output) => {
             if output.status.success() {
                 Ok(extract_version_from_output(&output.stdout))
@@ -621,78 +760,216 @@ fn compare_versions(a: &str, b: &str) -> Ordering {
     Ordering::Equal
 }
 
-/// Helper function to create a Command with proper environment variables
-/// This ensures commands like Claude can find Node.js and other dependencies
+/// Build a `Command` for the Claude binary with an environment it can work in.
+///
+/// A GUI app does not inherit the shell's environment, so this puts back the
+/// parts Claude needs. It is also the one place that knows how to extend PATH,
+/// which has to be done with the platform's own separator - joining with `:`
+/// on Windows produces a single unusable entry and silently breaks every
+/// lookup the child makes.
 pub fn create_command_with_env(program: &str) -> Command {
-    let mut cmd = Command::new(program);
+    let mut cmd = command_for(program);
 
     info!("Creating command for: {}", program);
 
-    // Inherit essential environment variables from parent process
     for (key, value) in std::env::vars() {
-        // Pass through PATH and other essential environment variables
-        if key == "PATH"
-            || key == "HOME"
-            || key == "USER"
-            || key == "SHELL"
-            || key == "LANG"
-            || key == "LC_ALL"
-            || key.starts_with("LC_")
-            || key == "NODE_PATH"
-            || key == "NVM_DIR"
-            || key == "NVM_BIN"
-            || key == "HOMEBREW_PREFIX"
-            || key == "HOMEBREW_CELLAR"
-            // Add proxy environment variables (only uppercase)
-            || key == "HTTP_PROXY"
-            || key == "HTTPS_PROXY"
-            || key == "NO_PROXY"
-            || key == "ALL_PROXY"
-        {
+        if should_inherit(&key) {
             debug!("Inheriting env var: {}={}", key, value);
             cmd.env(&key, &value);
         }
     }
 
-    // Log proxy-related environment variables for debugging
-    info!("Command will use proxy settings:");
-    if let Ok(http_proxy) = std::env::var("HTTP_PROXY") {
-        info!("  HTTP_PROXY={}", http_proxy);
-    }
-    if let Ok(https_proxy) = std::env::var("HTTPS_PROXY") {
-        info!("  HTTPS_PROXY={}", https_proxy);
-    }
-
-    // Add NVM support if the program is in an NVM directory
-    if program.contains("/.nvm/versions/node/") {
-        if let Some(node_bin_dir) = std::path::Path::new(program).parent() {
-            // Ensure the Node.js bin directory is in PATH
-            let current_path = std::env::var("PATH").unwrap_or_default();
-            let node_bin_str = node_bin_dir.to_string_lossy();
-            if !current_path.contains(&node_bin_str.as_ref()) {
-                let new_path = format!("{}:{}", node_bin_str, current_path);
-                debug!("Adding NVM bin directory to PATH: {}", node_bin_str);
-                cmd.env("PATH", new_path);
-            }
+    for var in ["HTTP_PROXY", "HTTPS_PROXY"] {
+        if let Ok(value) = std::env::var(var) {
+            info!("Command will use {}={}", var, value);
         }
     }
 
-    // Add Homebrew support if the program is in a Homebrew directory
-    if program.contains("/homebrew/") || program.contains("/opt/homebrew/") {
-        if let Some(program_dir) = std::path::Path::new(program).parent() {
-            // Ensure the Homebrew bin directory is in PATH
-            let current_path = std::env::var("PATH").unwrap_or_default();
-            let homebrew_bin_str = program_dir.to_string_lossy();
-            if !current_path.contains(&homebrew_bin_str.as_ref()) {
-                let new_path = format!("{}:{}", homebrew_bin_str, current_path);
-                debug!(
-                    "Adding Homebrew bin directory to PATH: {}",
-                    homebrew_bin_str
-                );
-                cmd.env("PATH", new_path);
+    // Directories that must be on the child's PATH: the one the binary itself
+    // lives in, so a version manager's `node` is found next to its `claude`,
+    // plus the usual places a Unix GUI app cannot see.
+    let mut wanted: Vec<String> = Vec::new();
+    if let Some(parent) = std::path::Path::new(program).parent() {
+        if !parent.as_os_str().is_empty() {
+            wanted.push(parent.to_string_lossy().to_string());
+        }
+    }
+    #[cfg(not(windows))]
+    wanted.extend(
+        ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+            .iter()
+            .map(|s| s.to_string()),
+    );
+
+    if !wanted.is_empty() {
+        let existing = std::env::var("PATH").unwrap_or_default();
+        let mut entries: Vec<String> = existing
+            .split(PATH_SEPARATOR)
+            .filter(|e| !e.is_empty())
+            .map(|e| e.to_string())
+            .collect();
+
+        for dir in wanted {
+            // Windows paths are case-insensitive, so a case-sensitive contains
+            // check would add C:\Foo next to c:\foo.
+            let already = entries.iter().any(|e| e.eq_ignore_ascii_case(&dir));
+            if !already {
+                debug!("Adding to the child's PATH: {}", dir);
+                entries.insert(0, dir);
             }
         }
+
+        cmd.env("PATH", entries.join(PATH_SEPARATOR));
     }
 
     cmd
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PATHEXT: &str = ".COM;.EXE;.BAT;.CMD;.VBS;.JS;.MSC";
+
+    #[test]
+    fn the_npm_shim_windows_cannot_start_is_not_mistaken_for_the_binary() {
+        // The three files `npm i -g` actually leaves behind.
+        assert!(!has_launchable_extension(r"C:\Users\x\AppData\Roaming\npm\claude", PATHEXT));
+        assert!(!has_launchable_extension(r"C:\Users\x\AppData\Roaming\npm\claude.ps1", PATHEXT));
+        assert!(has_launchable_extension(r"C:\Users\x\AppData\Roaming\npm\claude.cmd", PATHEXT));
+    }
+
+    #[test]
+    fn extensions_match_however_they_are_cased() {
+        assert!(has_launchable_extension(r"C:\bin\CLAUDE.CMD", PATHEXT));
+        assert!(has_launchable_extension(r"C:\bin\claude.Exe", ".com;.exe"));
+    }
+
+    #[test]
+    fn where_output_gives_up_the_cmd_rather_than_the_first_line() {
+        // Exactly the order `where claude` prints for an npm install.
+        let output = "C:\\Users\\x\\AppData\\Roaming\\npm\\claude\n                      C:\\Users\\x\\AppData\\Roaming\\npm\\claude.cmd\n                      C:\\Users\\x\\AppData\\Roaming\\npm\\claude.ps1\n";
+        let (path, skipped) = first_launchable(output, PATHEXT);
+        assert_eq!(path.unwrap(), r"C:\Users\x\AppData\Roaming\npm\claude.cmd");
+        assert_eq!(skipped, vec![r"C:\Users\x\AppData\Roaming\npm\claude"]);
+    }
+
+    #[test]
+    fn an_exe_on_the_first_line_is_taken_as_is() {
+        let (path, skipped) = first_launchable("C:\\tools\\claude.exe\n", PATHEXT);
+        assert_eq!(path.unwrap(), r"C:\tools\claude.exe");
+        assert!(skipped.is_empty());
+    }
+
+    #[test]
+    fn output_with_nothing_launchable_in_it_finds_nothing() {
+        let (path, skipped) = first_launchable("C:\\npm\\claude\nC:\\npm\\claude.ps1\n", PATHEXT);
+        assert!(path.is_none());
+        assert_eq!(skipped.len(), 2, "both should be reported as passed over");
+    }
+
+    #[test]
+    fn empty_and_blank_where_output_is_not_a_path() {
+        assert!(first_launchable("", PATHEXT).0.is_none());
+        assert!(first_launchable("   \n\n  \n", PATHEXT).0.is_none());
+    }
+
+    #[test]
+    fn the_child_gets_path_and_the_proxy_settings_and_not_the_whole_environment() {
+        assert!(should_inherit("PATH"));
+        assert!(should_inherit("HTTPS_PROXY"));
+        assert!(should_inherit("NODE_PATH"));
+        assert!(should_inherit("LC_CTYPE"));
+
+        assert!(!should_inherit("AWS_SECRET_ACCESS_KEY"));
+        assert!(!should_inherit("SOME_LOCAL_THING"));
+    }
+
+    #[test]
+    fn environment_names_match_however_they_are_cased() {
+        // Windows spells it `Path`, and treating that as a different variable
+        // would send the child out with no PATH at all.
+        assert!(should_inherit("Path"));
+        assert!(should_inherit("path"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_gets_the_variables_a_process_cannot_start_without() {
+        for key in ["SystemRoot", "ComSpec", "PATHEXT", "APPDATA", "USERPROFILE", "TEMP"] {
+            assert!(should_inherit(key), "{key} must reach the child");
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_gets_the_variables_a_version_manager_needs() {
+        for key in ["HOME", "SHELL", "NVM_BIN", "HOMEBREW_PREFIX"] {
+            assert!(should_inherit(key), "{key} must reach the child");
+        }
+    }
+
+    #[test]
+    fn path_is_joined_with_the_separator_this_platform_uses() {
+        // Joining with ':' on Windows makes one unusable entry out of every
+        // directory, and every lookup the child does then fails.
+        if cfg!(windows) {
+            assert_eq!(PATH_SEPARATOR, ";");
+        } else {
+            assert_eq!(PATH_SEPARATOR, ":");
+        }
+    }
+
+    #[test]
+    fn the_binarys_own_directory_is_put_on_the_childs_path() {
+        // A version manager keeps `node` next to `claude`; without the parent
+        // directory on PATH the shim runs and then cannot find its runtime.
+        let program = if cfg!(windows) {
+            r"C:\opcode-test-not-on-path\claude.cmd"
+        } else {
+            "/opcode-test-not-on-path/claude"
+        };
+        let path = child_path(program).expect("PATH should be set on the child");
+        let parent = parent_of(program);
+
+        assert!(path.starts_with(&parent), "expected {parent} first in {path}");
+    }
+
+    #[test]
+    fn a_directory_already_on_path_is_not_added_a_second_time() {
+        // Re-adding it would grow PATH on every spawn and, on Windows, do it
+        // under whichever casing this call happened to see.
+        let existing = std::env::var("PATH").unwrap_or_default();
+        let first = existing
+            .split(PATH_SEPARATOR)
+            .find(|e| !e.is_empty())
+            .expect("the test process should have a PATH")
+            .to_string();
+
+        let program = format!("{first}{}claude", std::path::MAIN_SEPARATOR);
+        let path = child_path(&program).expect("PATH should be set on the child");
+
+        let occurrences = path
+            .split(PATH_SEPARATOR)
+            .filter(|e| e.eq_ignore_ascii_case(&first))
+            .count();
+        assert_eq!(occurrences, 1, "{first} should appear once in {path}");
+    }
+
+    /// The PATH `create_command_with_env` would hand to a child.
+    fn child_path(program: &str) -> Option<String> {
+        create_command_with_env(program)
+            .get_envs()
+            .find(|(k, _)| k.to_string_lossy().eq_ignore_ascii_case("PATH"))
+            .and_then(|(_, v)| v)
+            .map(|v| v.to_string_lossy().to_string())
+    }
+
+    fn parent_of(program: &str) -> String {
+        std::path::Path::new(program)
+            .parent()
+            .unwrap()
+            .to_string_lossy()
+            .to_string()
+    }
 }
