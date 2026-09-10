@@ -382,30 +382,65 @@ const BUILTIN_AGENTS: &[(&str, &str)] = &[
     ),
 ];
 
-/// Key recording that the built-in agents have already been installed
+/// Key recording which revision of the bundled agents has been installed
 const BUILTIN_AGENTS_SEEDED_KEY: &str = "builtin_agents_seeded_version";
 
-/// Install the bundled agents on first run.
+/// Bump this whenever a file in `cc_agents/` changes, so existing
+/// installations pick the new version up. Without a bump, a prompt change
+/// only ever reaches brand-new installs.
+const BUILTIN_AGENTS_VERSION: u32 = 2;
+
+/// Prefix for the per-agent fingerprint of what we last wrote
+const BUILTIN_AGENT_FINGERPRINT_PREFIX: &str = "builtin_agent_fingerprint:";
+
+/// Fingerprint of the fields seeding owns, used to tell "the user has edited
+/// this agent" from "this agent is still exactly as we shipped it".
+fn builtin_agent_fingerprint(system_prompt: &str, default_task: &str, model: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(system_prompt.as_bytes());
+    hasher.update([0]);
+    hasher.update(default_task.as_bytes());
+    hasher.update([0]);
+    hasher.update(model.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// Install the bundled agents, and carry forward changes to them.
 ///
-/// Runs exactly once per database, guarded by a flag in `app_settings`
-/// rather than by "is the agents table empty": these are starting points the
-/// user is expected to edit or delete, and re-seeding would resurrect agents
-/// they deliberately removed. Individual agents are still skipped by name so
-/// a partially-seeded database can't end up with duplicates.
+/// Three rules, in tension, decide what happens to an agent already in the
+/// database:
+///   - An agent the user **deleted** is never resurrected. So this is keyed
+///     off a version in `app_settings`, not off "is the agents table empty".
+///   - An agent the user **edited** is never overwritten. Their copy wins for
+///     good, and we stop tracking it.
+///   - An **untouched** agent is updated in place, which is the only way a
+///     prompt fix ever reaches an existing install.
+///
+/// Whether an agent was edited is decided by comparing a fingerprint of the
+/// fields we own against what we last wrote — anything else would mean
+/// guessing, and guessing wrong either drops the user's work or strands them
+/// on a stale prompt.
 fn seed_builtin_agents(conn: &Connection) -> SqliteResult<()> {
-    let already_seeded: Option<String> = conn
+    let installed_version: u32 = conn
         .query_row(
             "SELECT value FROM app_settings WHERE key = ?1",
             params![BUILTIN_AGENTS_SEEDED_KEY],
-            |row| row.get(0),
+            |row| row.get::<_, String>(0),
         )
-        .optional()?;
+        .optional()?
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
 
-    if already_seeded.is_some() {
+    if installed_version >= BUILTIN_AGENTS_VERSION {
         return Ok(());
     }
+    let first_run = installed_version == 0;
 
-    let mut seeded = 0;
+    let mut inserted = 0;
+    let mut updated = 0;
+    let mut left_alone = 0;
+
     for (slug, json) in BUILTIN_AGENTS {
         // A malformed bundled agent must not stop the app from starting, and
         // must not stop the remaining agents from being installed.
@@ -416,40 +451,95 @@ fn seed_builtin_agents(conn: &Connection) -> SqliteResult<()> {
                 continue;
             }
         };
-
         let agent = export.agent;
+        let default_task = agent.default_task.clone().unwrap_or_default();
+        let fingerprint =
+            builtin_agent_fingerprint(&agent.system_prompt, &default_task, &agent.model);
+        let fingerprint_key = format!("{}{}", BUILTIN_AGENT_FINGERPRINT_PREFIX, agent.name);
 
-        let existing: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM agents WHERE name = ?1",
-            params![agent.name],
-            |row| row.get(0),
-        )?;
-        if existing > 0 {
-            continue;
+        let existing: Option<(i64, String, String, String)> = conn
+            .query_row(
+                "SELECT id, system_prompt, COALESCE(default_task, ''), COALESCE(model, '') \
+                 FROM agents WHERE name = ?1",
+                params![agent.name],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+
+        match existing {
+            None if first_run => {
+                conn.execute(
+                    "INSERT INTO agents (name, icon, system_prompt, default_task, model, enable_file_read, enable_file_write, enable_network, hooks) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, 1, 1, 0, ?6)",
+                    params![
+                        agent.name,
+                        agent.icon,
+                        agent.system_prompt,
+                        agent.default_task,
+                        agent.model,
+                        agent.hooks
+                    ],
+                )?;
+                conn.execute(
+                    "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
+                    params![fingerprint_key, fingerprint],
+                )?;
+                inserted += 1;
+            }
+            // Gone on an upgrade means the user deleted it. Leave it deleted.
+            None => left_alone += 1,
+            Some((id, current_prompt, current_task, current_model)) => {
+                let previous: Option<String> = conn
+                    .query_row(
+                        "SELECT value FROM app_settings WHERE key = ?1",
+                        params![&fingerprint_key],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+
+                let current =
+                    builtin_agent_fingerprint(&current_prompt, &current_task, &current_model);
+
+                // Untouched since we wrote it, so ours to update. A row with no
+                // recorded fingerprint predates this tracking (or was created
+                // by hand under the same name) and is treated as the user's.
+                if previous.as_deref() == Some(current.as_str()) {
+                    if current == fingerprint {
+                        continue;
+                    }
+                    conn.execute(
+                        "UPDATE agents SET system_prompt = ?1, default_task = ?2, model = ?3, \
+                         updated_at = CURRENT_TIMESTAMP WHERE id = ?4",
+                        params![agent.system_prompt, agent.default_task, agent.model, id],
+                    )?;
+                    conn.execute(
+                        "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
+                        params![fingerprint_key, fingerprint],
+                    )?;
+                    updated += 1;
+                } else {
+                    // Theirs now. Drop the fingerprint so later versions don't
+                    // keep re-examining an agent we've handed over.
+                    conn.execute(
+                        "DELETE FROM app_settings WHERE key = ?1",
+                        params![&fingerprint_key],
+                    )?;
+                    left_alone += 1;
+                }
+            }
         }
-
-        conn.execute(
-            "INSERT INTO agents (name, icon, system_prompt, default_task, model, enable_file_read, enable_file_write, enable_network, hooks) \
-             VALUES (?1, ?2, ?3, ?4, ?5, 1, 1, 0, ?6)",
-            params![
-                agent.name,
-                agent.icon,
-                agent.system_prompt,
-                agent.default_task,
-                agent.model,
-                agent.hooks
-            ],
-        )?;
-        seeded += 1;
     }
 
     conn.execute(
         "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
-        params![BUILTIN_AGENTS_SEEDED_KEY, "1"],
+        params![BUILTIN_AGENTS_SEEDED_KEY, BUILTIN_AGENTS_VERSION.to_string()],
     )?;
 
-    if seeded > 0 {
-        info!("Seeded {} built-in agents", seeded);
+    if inserted + updated > 0 {
+        info!(
+            "Built-in agents at v{}: {} added, {} updated, {} left to the user",
+            BUILTIN_AGENTS_VERSION, inserted, updated, left_alone
+        );
     }
 
     Ok(())
@@ -1752,61 +1842,14 @@ pub async fn list_claude_installations(
 }
 
 /// Helper function to create a tokio Command with proper environment variables
-/// This ensures commands like Claude can find Node.js and other dependencies
+///
+/// This delegates to `claude_binary::create_command_with_env` rather than
+/// rebuilding the command: that helper is the only place that knows how to
+/// launch an npm `.cmd` shim, which PATH entries to add with which separator,
+/// and which environment variables Windows cannot start a process without.
+/// Two copies of that meant a fix to one silently missed this spawn path.
 fn create_command_with_env(program: &str) -> Command {
-    // Convert std::process::Command to tokio::process::Command
-    let _std_cmd = crate::claude_binary::create_command_with_env(program);
-
-    // Create a new tokio Command from the program path
-    let mut tokio_cmd = Command::new(program);
-
-    // Copy over all environment variables from the std::process::Command
-    // This is a workaround since we can't directly convert between the two types
-    for (key, value) in std::env::vars() {
-        if key == "PATH"
-            || key == "HOME"
-            || key == "USER"
-            || key == "SHELL"
-            || key == "LANG"
-            || key == "LC_ALL"
-            || key.starts_with("LC_")
-            || key == "NODE_PATH"
-            || key == "NVM_DIR"
-            || key == "NVM_BIN"
-            || key == "HOMEBREW_PREFIX"
-            || key == "HOMEBREW_CELLAR"
-        {
-            tokio_cmd.env(&key, &value);
-        }
-    }
-
-    // Add NVM support if the program is in an NVM directory
-    if program.contains("/.nvm/versions/node/") {
-        if let Some(node_bin_dir) = std::path::Path::new(program).parent() {
-            let current_path = std::env::var("PATH").unwrap_or_default();
-            let node_bin_str = node_bin_dir.to_string_lossy();
-            if !current_path.contains(&node_bin_str.as_ref()) {
-                let new_path = format!("{}:{}", node_bin_str, current_path);
-                tokio_cmd.env("PATH", new_path);
-            }
-        }
-    }
-
-    // Ensure PATH contains common Homebrew locations
-    if let Ok(existing_path) = std::env::var("PATH") {
-        let mut paths: Vec<&str> = existing_path.split(':').collect();
-        for p in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].iter() {
-            if !paths.contains(p) {
-                paths.push(p);
-            }
-        }
-        let joined = paths.join(":");
-        tokio_cmd.env("PATH", joined);
-    } else {
-        tokio_cmd.env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin");
-    }
-
-    tokio_cmd
+    Command::from(crate::claude_binary::create_command_with_env(program))
 }
 
 /// Import an agent from JSON data
@@ -2251,5 +2294,142 @@ mod tests {
             .unwrap();
         assert_eq!(tester_count, 1, "should not insert a duplicate");
         assert_eq!(agent_names(&conn).len(), BUILTIN_AGENTS.len());
+    }
+
+    /// Rewinds the recorded version so the next call takes the upgrade path,
+    /// as it would after the app is updated with new bundled agents.
+    fn pretend_older_version(conn: &Connection) {
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
+            params![BUILTIN_AGENTS_SEEDED_KEY, "1"],
+        )
+        .unwrap();
+    }
+
+    fn tester_prompt(conn: &Connection) -> String {
+        conn.query_row(
+            "SELECT system_prompt FROM agents WHERE name = 'Tester'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn an_untouched_agent_is_updated_when_the_bundled_version_moves() {
+        let conn = test_conn();
+        seed_builtin_agents(&conn).unwrap();
+        let shipped = tester_prompt(&conn);
+
+        // Stand in for having shipped an older prompt: the row holds the old
+        // text and the fingerprint agrees with it, which is what an install
+        // from the previous version looks like.
+        let stale = "an older bundled prompt";
+        let (task, model): (String, String) = conn
+            .query_row(
+                "SELECT COALESCE(default_task, ''), COALESCE(model, '') FROM agents WHERE name = 'Tester'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        conn.execute(
+            "UPDATE agents SET system_prompt = ?1 WHERE name = 'Tester'",
+            params![stale],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
+            params![
+                format!("{}Tester", BUILTIN_AGENT_FINGERPRINT_PREFIX),
+                builtin_agent_fingerprint(stale, &task, &model)
+            ],
+        )
+        .unwrap();
+        pretend_older_version(&conn);
+
+        seed_builtin_agents(&conn).unwrap();
+
+        // The whole point of versioning: a prompt fix reaches an install that
+        // already exists, instead of only new ones.
+        assert_eq!(
+            tester_prompt(&conn),
+            shipped,
+            "an unmodified bundled agent should pick up the new prompt"
+        );
+    }
+
+    #[test]
+    fn an_edited_agent_survives_an_upgrade() {
+        let conn = test_conn();
+        seed_builtin_agents(&conn).unwrap();
+
+        // A user edit through the UI changes the row and leaves the recorded
+        // fingerprint behind — that mismatch is what marks it as theirs.
+        conn.execute(
+            "UPDATE agents SET system_prompt = 'my own prompt' WHERE name = 'Tester'",
+            [],
+        )
+        .unwrap();
+        pretend_older_version(&conn);
+
+        seed_builtin_agents(&conn).unwrap();
+        assert_eq!(tester_prompt(&conn), "my own prompt");
+
+        // And it stays theirs on every version after this one
+        pretend_older_version(&conn);
+        seed_builtin_agents(&conn).unwrap();
+        assert_eq!(tester_prompt(&conn), "my own prompt");
+    }
+
+    #[test]
+    fn a_deleted_agent_is_not_resurrected_by_an_upgrade() {
+        let conn = test_conn();
+        seed_builtin_agents(&conn).unwrap();
+
+        conn.execute("DELETE FROM agents WHERE name = 'Tester'", [])
+            .unwrap();
+        pretend_older_version(&conn);
+
+        seed_builtin_agents(&conn).unwrap();
+
+        assert!(
+            !agent_names(&conn).contains(&"Tester".to_string()),
+            "an upgrade must not bring back an agent the user removed"
+        );
+        // The rest are still there — one deletion shouldn't disturb them
+        assert_eq!(agent_names(&conn).len(), BUILTIN_AGENTS.len() - 1);
+    }
+
+    #[test]
+    fn the_bundled_tester_prompt_documents_the_granular_defect_fields() {
+        // The Defects sheet only fills in if the agent knows to write these,
+        // and the exporter, this prompt and templates/README.md have to move
+        // together. A silent drift here shows up as empty columns.
+        let (_, tester) = BUILTIN_AGENTS
+            .iter()
+            .find(|(slug, _)| *slug == "tester")
+            .expect("tester should be bundled");
+        let export: AgentExport = serde_json::from_str(tester).unwrap();
+        let prompt = export.agent.system_prompt;
+
+        for field in [
+            "\"area\"",
+            "\"type\"",
+            "\"priority\"",
+            "\"reproducibility\"",
+            "\"detected_by\"",
+            "\"error_log\"",
+            "\"code_ref\"",
+            "\"root_cause\"",
+            "\"suggested_fix\"",
+            "\"evidence\"",
+            "\"found_in\"",
+            "\"blocks\"",
+        ] {
+            assert!(
+                prompt.contains(field),
+                "the tester prompt should tell the agent to write {field}"
+            );
+        }
     }
 }

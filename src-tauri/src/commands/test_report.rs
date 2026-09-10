@@ -77,6 +77,16 @@ impl Lines {
         }
     }
 
+    /// One cell's worth of text, one part per line and nothing added.
+    ///
+    /// For content that is a sequence but not a procedure — a stack trace, a
+    /// list of file paths, the cases a bug blocks. Numbering those would
+    /// invent an ordering the content doesn't have, and mangles a trace that
+    /// someone needs to read or grep verbatim.
+    pub fn joined(&self) -> String {
+        self.parts().join("\n")
+    }
+
     /// One cell's worth of text, numbered when there is more than one part.
     ///
     /// Numbering matters in a spreadsheet: a reviewer reading a failed case
@@ -246,22 +256,106 @@ pub struct Defect {
     pub id: String,
     #[serde(default, alias = "summary")]
     pub title: String,
+    /// Which part of the feature is broken, matching a case's `area`
+    #[serde(default, alias = "component", alias = "module")]
+    pub area: String,
+    /// Functional, UI, Validation, Crash, and so on. `type` is a keyword, so
+    /// the field is renamed rather than named after the JSON key.
+    #[serde(
+        default,
+        rename = "type",
+        alias = "defect_type",
+        alias = "bug_type",
+        alias = "category"
+    )]
+    pub defect_type: String,
+    /// How bad the failure is
     #[serde(default)]
     pub severity: String,
+    /// How soon it should be fixed — not the same judgement as severity, and
+    /// a report that conflates them can't be triaged
+    #[serde(default)]
+    pub priority: String,
+    #[serde(default)]
+    pub status: String,
     #[serde(default, alias = "test_case", alias = "case")]
     pub case_id: String,
+    /// The test, command or manual check that surfaced it
+    #[serde(default, alias = "found_by", alias = "source")]
+    pub detected_by: String,
+    /// Always, Intermittent (n of m), or Once — an intermittent bug that
+    /// reads as reproducible wastes the next person's afternoon
+    #[serde(default, alias = "repro_rate", alias = "frequency")]
+    pub reproducibility: String,
+    #[serde(default)]
+    pub platform: String,
+    #[serde(default, alias = "env")]
+    pub environment: String,
     #[serde(default, alias = "repro")]
     pub steps: Lines,
     #[serde(default)]
     pub expected: String,
     #[serde(default)]
     pub actual: String,
-    #[serde(default, alias = "env")]
-    pub environment: String,
-    #[serde(default)]
-    pub status: String,
+    /// Verbatim error, assertion or stack trace
+    #[serde(default, alias = "error", alias = "log", alias = "logs", alias = "stack_trace")]
+    pub error_log: Lines,
+    /// Where it lives in the code, as `path/to/file.rs:120`
+    #[serde(default, alias = "code_location", alias = "location", alias = "file_ref")]
+    pub code_ref: String,
+    #[serde(default, alias = "cause", alias = "diagnosis")]
+    pub root_cause: String,
+    #[serde(default, alias = "fix", alias = "proposed_fix", alias = "remediation")]
+    pub suggested_fix: String,
+    /// Screenshot, recording or log file backing the report up
+    #[serde(default, alias = "artifacts", alias = "screenshot")]
+    pub evidence: Lines,
+    /// The build, branch or commit it was found on
+    #[serde(default, alias = "build", alias = "version")]
+    pub found_in: String,
+    /// Cases or features that can't be tested until this is fixed
+    #[serde(default, alias = "blocked", alias = "blocking")]
+    pub blocks: Lines,
     #[serde(default)]
     pub notes: String,
+}
+
+/// Sort rank for a severity word. Unknown or missing severities sort last
+/// rather than being dropped or guessed at.
+fn severity_rank(severity: &str) -> u8 {
+    let s = severity.to_ascii_lowercase();
+    if s.contains("critical") || s.contains("blocker") {
+        0
+    } else if s.contains("major") || s.contains("high") {
+        1
+    } else if s.contains("minor") || s.contains("medium") || s.contains("moderate") {
+        2
+    } else if s.contains("trivial") || s.contains("low") || s.contains("cosmetic") {
+        3
+    } else {
+        4
+    }
+}
+
+/// Sort rank for a `P0`-style priority, on the same "unknown sorts last" basis.
+fn priority_rank(priority: &str) -> u8 {
+    let p = priority.to_ascii_lowercase();
+    for (needle, rank) in [("p0", 0), ("p1", 1), ("p2", 2), ("p3", 3)] {
+        if p.contains(needle) {
+            return rank;
+        }
+    }
+    if p.contains("urgent") || p.contains("highest") {
+        0
+    } else if p.contains("high") {
+        1
+    } else if p.contains("medium") || p.contains("normal") {
+        2
+    } else if p.contains("low") {
+        3
+    } else {
+        4
+    }
 }
 
 /// A requirement and the cases that cover it.
@@ -1022,32 +1116,72 @@ pub fn build_workbook(report: &TestReport) -> Result<Vec<u8>, String> {
     {
         let sheet = workbook.add_worksheet();
         sheet.set_name("Defects").map_err(err)?;
+        // Grouped left to right the way a bug is actually read: what and how
+        // bad, then how to see it, then what it means in the code, then the
+        // paper trail.
         let columns: &[(&str, f64)] = &[
             ("ID", 10.0),
             ("Title", 44.0),
+            ("Area", 18.0),
+            ("Type", 14.0),
             ("Severity", 11.0),
+            ("Priority", 10.0),
+            ("Status", 12.0),
             ("Case", 11.0),
+            ("Detected by", 26.0),
+            ("Reproducibility", 16.0),
+            ("Platform", 16.0),
+            ("Environment", 24.0),
             ("Steps to reproduce", 46.0),
             ("Expected", 34.0),
             ("Actual", 34.0),
-            ("Environment", 24.0),
-            ("Status", 12.0),
+            ("Error / log output", 44.0),
+            ("Code reference", 30.0),
+            ("Root cause", 38.0),
+            ("Suggested fix", 38.0),
+            ("Evidence", 26.0),
+            ("Found in", 16.0),
+            ("Blocks", 20.0),
             ("Notes", 30.0),
         ];
-        let rows = report
-            .defects
+
+        // Worst first, so the sheet opens on what matters. Sorted by severity,
+        // then priority, then id to keep the order stable between exports of
+        // the same report.
+        let mut defects: Vec<&Defect> = report.defects.iter().collect();
+        defects.sort_by(|a, b| {
+            severity_rank(&a.severity)
+                .cmp(&severity_rank(&b.severity))
+                .then(priority_rank(&a.priority).cmp(&priority_rank(&b.priority)))
+                .then(a.id.cmp(&b.id))
+        });
+
+        let rows = defects
             .iter()
             .map(|d| {
                 vec![
                     text(d.id.trim()),
                     wrap(d.title.trim()),
+                    text(d.area.trim()),
+                    text(d.defect_type.trim()),
                     text(d.severity.trim()),
+                    text(d.priority.trim()),
+                    text(d.status.trim()),
                     text(d.case_id.trim()),
+                    wrap(d.detected_by.trim()),
+                    text(d.reproducibility.trim()),
+                    text(d.platform.trim()),
+                    wrap(d.environment.trim()),
                     wrap(d.steps.numbered()),
                     wrap(d.expected.trim()),
                     wrap(d.actual.trim()),
-                    wrap(d.environment.trim()),
-                    text(d.status.trim()),
+                    wrap(d.error_log.joined()),
+                    wrap(d.code_ref.trim()),
+                    wrap(d.root_cause.trim()),
+                    wrap(d.suggested_fix.trim()),
+                    wrap(d.evidence.joined()),
+                    text(d.found_in.trim()),
+                    wrap(d.blocks.joined()),
                     wrap(d.notes.trim()),
                 ]
             })
@@ -1510,6 +1644,146 @@ mod tests {
         // "ok" and "Failed" are stored as the canonical words, so the column filters.
         assert_eq!(rows[1][11], "Pass");
         assert_eq!(rows[2][11], "Fail");
+    }
+
+    #[test]
+    fn the_defects_sheet_carries_every_granular_field() {
+        let report = report_from(
+            r#"{
+                 "defects": [
+                   { "id": "BUG-01",
+                     "title": "Cancel is too small to tap",
+                     "area": "Import dialog",
+                     "type": "Accessibility",
+                     "severity": "Major",
+                     "priority": "P2",
+                     "status": "Open",
+                     "case_id": "TC-13",
+                     "detected_by": "Manual check on a Pixel 8",
+                     "reproducibility": "Always",
+                     "platform": "Mobile web",
+                     "environment": "Pixel 8 / Chrome 129",
+                     "steps": ["Open the board", "Press Import"],
+                     "expected": "44x44 px",
+                     "actual": "36px tall",
+                     "error_log": ["line one", "line two"],
+                     "code_ref": "src/components/ImportDialog.tsx:212",
+                     "root_cause": "Desktop button size applied unconditionally",
+                     "suggested_fix": "Set min-height at the mobile breakpoint",
+                     "evidence": ["shots/a.png", "shots/b.png"],
+                     "found_in": "feat/x @ 4f1c9ab",
+                     "blocks": ["TC-14"],
+                     "notes": "footer only" }
+                 ]
+               }"#,
+        );
+        let bytes = build_workbook(&report).expect("should build");
+        let rows = read_sheet(&bytes, "Defects");
+
+        let headings = &rows[0];
+        for expected in [
+            "ID", "Title", "Area", "Type", "Severity", "Priority", "Status", "Case",
+            "Detected by", "Reproducibility", "Platform", "Environment",
+            "Steps to reproduce", "Expected", "Actual", "Error / log output",
+            "Code reference", "Root cause", "Suggested fix", "Evidence", "Found in",
+            "Blocks", "Notes",
+        ] {
+            assert!(
+                headings.iter().any(|h| h == expected),
+                "missing column {expected}: {headings:?}"
+            );
+        }
+
+        // Every value must survive to the sheet — a column that renders blank
+        // is worse than one that isn't there, since it reads as "nothing found".
+        let bug = &rows[1];
+        let at = |name: &str| {
+            let i = headings.iter().position(|h| h == name).expect(name);
+            bug[i].clone()
+        };
+        assert_eq!(at("ID"), "BUG-01");
+        assert_eq!(at("Area"), "Import dialog");
+        assert_eq!(at("Type"), "Accessibility");
+        assert_eq!(at("Severity"), "Major");
+        assert_eq!(at("Priority"), "P2");
+        assert_eq!(at("Reproducibility"), "Always");
+        assert_eq!(at("Code reference"), "src/components/ImportDialog.tsx:212");
+        assert_eq!(at("Found in"), "feat/x @ 4f1c9ab");
+        assert!(at("Root cause").contains("unconditionally"));
+        assert!(at("Suggested fix").contains("min-height"));
+        assert_eq!(at("Blocks"), "TC-14");
+
+        // Steps are numbered so a reviewer can point at one...
+        assert_eq!(at("Steps to reproduce"), "1. Open the board\n2. Press Import");
+        // ...but a stack trace and a file list must stay verbatim.
+        assert_eq!(at("Error / log output"), "line one\nline two");
+        assert_eq!(at("Evidence"), "shots/a.png\nshots/b.png");
+    }
+
+    #[test]
+    fn defects_are_listed_worst_first() {
+        let report = report_from(
+            r#"{
+                 "defects": [
+                   { "id": "BUG-04", "title": "cosmetic", "severity": "Trivial" },
+                   { "id": "BUG-03", "title": "unlabelled" },
+                   { "id": "BUG-02", "title": "crash", "severity": "Critical", "priority": "P1" },
+                   { "id": "BUG-01", "title": "crash too", "severity": "Critical", "priority": "P0" },
+                   { "id": "BUG-05", "title": "wrong total", "severity": "Major" }
+                 ]
+               }"#,
+        );
+        let bytes = build_workbook(&report).expect("should build");
+        let rows = read_sheet(&bytes, "Defects");
+        let ids: Vec<&str> = rows[1..].iter().map(|r| r[0].as_str()).collect();
+
+        // Critical first, P0 ahead of P1 within it, then Major, then Trivial,
+        // and the row with no severity at all sorts last rather than being
+        // guessed into the middle.
+        assert_eq!(ids, vec!["BUG-01", "BUG-02", "BUG-05", "BUG-04", "BUG-03"]);
+    }
+
+    #[test]
+    fn defect_field_aliases_are_accepted() {
+        // The file's author is a language model, so the likely alternative
+        // spellings have to land in the same columns.
+        let report = report_from(
+            r#"{
+                 "bugs": [
+                   { "id": "BUG-01",
+                     "summary": "titled via summary",
+                     "component": "Parser",
+                     "bug_type": "Data",
+                     "frequency": "Intermittent (2 of 10)",
+                     "error": "boom",
+                     "location": "src/lib.rs:9",
+                     "cause": "off by one",
+                     "fix": "add one",
+                     "screenshot": "a.png",
+                     "build": "abc123",
+                     "blocking": "TC-02" }
+                 ]
+               }"#,
+        );
+        let bytes = build_workbook(&report).expect("should build");
+        let rows = read_sheet(&bytes, "Defects");
+        let headings = &rows[0];
+        let at = |name: &str| {
+            let i = headings.iter().position(|h| h == name).expect(name);
+            rows[1][i].clone()
+        };
+
+        assert_eq!(at("Title"), "titled via summary");
+        assert_eq!(at("Area"), "Parser");
+        assert_eq!(at("Type"), "Data");
+        assert_eq!(at("Reproducibility"), "Intermittent (2 of 10)");
+        assert_eq!(at("Error / log output"), "boom");
+        assert_eq!(at("Code reference"), "src/lib.rs:9");
+        assert_eq!(at("Root cause"), "off by one");
+        assert_eq!(at("Suggested fix"), "add one");
+        assert_eq!(at("Evidence"), "a.png");
+        assert_eq!(at("Found in"), "abc123");
+        assert_eq!(at("Blocks"), "TC-02");
     }
 
     #[test]
