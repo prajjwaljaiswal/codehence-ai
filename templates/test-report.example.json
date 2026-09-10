@@ -67,7 +67,9 @@
       "priority": "P1",
       "platform": "Desktop",
       "preconditions": "",
-      "steps": ["Import a CSV containing only a heading row"],
+      "steps": [
+        "Import a CSV containing only a heading row"
+      ],
       "test_data": "title,epic,priority (headings only)",
       "expected": "Preview shows zero rows, the Import button is disabled, and no error is raised.",
       "actual": "As expected.",
@@ -86,7 +88,9 @@
       "priority": "P0",
       "platform": "Desktop",
       "preconditions": "",
-      "steps": ["Import a CSV whose second column is spelt \"epci\""],
+      "steps": [
+        "Import a CSV whose second column is spelt \"epci\""
+      ],
       "test_data": "title,epci,priority",
       "expected": "The preview lists \"epci\" under columns that were not understood; the other columns still import.",
       "actual": "As expected.",
@@ -105,7 +109,9 @@
       "priority": "P1",
       "platform": "Desktop",
       "preconditions": "",
-      "steps": ["Import a CSV where one row has two cells and another has six"],
+      "steps": [
+        "Import a CSV where one row has two cells and another has six"
+      ],
       "test_data": "Rows of unequal length",
       "expected": "Short rows fill the missing fields with defaults; over-long rows keep the columns that map and ignore the rest. No row sinks the import.",
       "actual": "As expected.",
@@ -124,7 +130,10 @@
       "priority": "P0",
       "platform": "Desktop",
       "preconditions": "",
-      "steps": ["Import a CSV where row 3 has an empty title", "Read row 3 in the preview"],
+      "steps": [
+        "Import a CSV where row 3 has an empty title",
+        "Read row 3 in the preview"
+      ],
       "test_data": ",Onboarding,high",
       "expected": "Row 3 is greyed out and carries the reason it cannot become a ticket; the count reads \"1 will be skipped\".",
       "actual": "As expected.",
@@ -143,7 +152,9 @@
       "priority": "P2",
       "platform": "Desktop",
       "preconditions": "",
-      "steps": ["Import a row whose priority reads \"urgent-ish\""],
+      "steps": [
+        "Import a row whose priority reads \"urgent-ish\""
+      ],
       "test_data": "Fix login,Auth,urgent-ish",
       "expected": "The ticket is created at medium priority and the substitution is visible in the preview.",
       "actual": "Ticket created at medium. The preview shows \"medium\" but does not say it was substituted.",
@@ -162,7 +173,10 @@
       "priority": "P1",
       "platform": "Desktop",
       "preconditions": "",
-      "steps": ["Import a sheet with two blank lines before the headings", "Compare a row's number with Excel's"],
+      "steps": [
+        "Import a sheet with two blank lines before the headings",
+        "Compare a row's number with Excel's"
+      ],
       "test_data": "Sheet with leading blank rows",
       "expected": "A problem on the fifth line of the file is reported as row 5, not row 3.",
       "actual": "As expected.",
@@ -181,7 +195,10 @@
       "priority": "P0",
       "platform": "Desktop",
       "preconditions": "",
-      "steps": ["Save the template as .xlsx in Excel", "Import the .xlsx"],
+      "steps": [
+        "Save the template as .xlsx in Excel",
+        "Import the .xlsx"
+      ],
       "test_data": "tickets.xlsx, first sheet",
       "expected": "The same tickets appear as from the CSV; the preview names the sheet it read.",
       "actual": "As expected.",
@@ -200,7 +217,10 @@
       "priority": "P1",
       "platform": "Desktop",
       "preconditions": "",
-      "steps": ["Rename a PNG to tickets.csv", "Import it"],
+      "steps": [
+        "Rename a PNG to tickets.csv",
+        "Import it"
+      ],
       "test_data": "A PNG with a .csv extension",
       "expected": "An error naming the file and what went wrong; no tickets created, no crash.",
       "actual": "Error shown in the dialog, nothing created.",
@@ -219,7 +239,10 @@
       "priority": "P2",
       "platform": "Desktop",
       "preconditions": "",
-      "steps": ["Generate a 2,000-row CSV", "Import it and time the preview"],
+      "steps": [
+        "Generate a 2,000-row CSV",
+        "Import it and time the preview"
+      ],
       "test_data": "2,000 valid rows",
       "expected": "The preview appears in under 3s and the list scrolls smoothly.",
       "actual": "Preview in ~1.2s; the table scrolls without dropping frames.",
@@ -238,7 +261,10 @@
       "priority": "P1",
       "platform": "Desktop",
       "preconditions": "",
-      "steps": ["Import a row titled \"लॉगिन ठीक करें — 日本語\"", "Read the ticket on the board"],
+      "steps": [
+        "Import a row titled \"लॉगिन ठीक करें — 日本語\"",
+        "Read the ticket on the board"
+      ],
       "test_data": "UTF-8 with an em dash and Devanagari",
       "expected": "The title on the card is byte-for-byte what was in the sheet.",
       "actual": "As expected.",
@@ -280,7 +306,10 @@
       "priority": "P1",
       "platform": "Android Chrome",
       "preconditions": "",
-      "steps": ["Open the import dialog on a Pixel 8", "Measure the Cancel and Import buttons"],
+      "steps": [
+        "Open the import dialog on a Pixel 8",
+        "Measure the Cancel and Import buttons"
+      ],
       "test_data": "",
       "expected": "Both buttons are at least 44x44 CSS px and are not overlapped by the home-gesture area.",
       "actual": "Import is 44px tall. Cancel is 36px and sits 6px above the gesture bar.",
@@ -299,7 +328,10 @@
       "priority": "P2",
       "platform": "Mobile web",
       "preconditions": "",
-      "steps": ["Preview a file in portrait", "Rotate to landscape"],
+      "steps": [
+        "Preview a file in portrait",
+        "Rotate to landscape"
+      ],
       "test_data": "",
       "expected": "The same rows are still listed; the file is not re-read and nothing is lost.",
       "actual": "As expected.",
@@ -318,7 +350,10 @@
       "priority": "P1",
       "platform": "Mobile web",
       "preconditions": "",
-      "steps": ["Start an import of 200 rows", "Put the phone into airplane mode before it finishes"],
+      "steps": [
+        "Start an import of 200 rows",
+        "Put the phone into airplane mode before it finishes"
+      ],
       "test_data": "200 valid rows",
       "expected": "A readable failure, the dialog stays open, and the board is not left half-imported.",
       "actual": "Not reached - the run ended before this was exercised.",
@@ -416,8 +451,16 @@
     {
       "id": "BUG-01",
       "title": "Cancel button in the import dialog is below the 44px minimum tap target on phones",
+      "area": "Import dialog",
+      "type": "Accessibility",
       "severity": "Major",
+      "priority": "P2",
+      "status": "Open",
       "case_id": "TC-13",
+      "detected_by": "Manual check — measured in Chrome device emulation, confirmed on a Pixel 8",
+      "reproducibility": "Always",
+      "platform": "Mobile web",
+      "environment": "Pixel 8 / Android 15 / Chrome 129; also iPhone SE / iOS 18.4 / Safari",
       "steps": [
         "Open the board in a phone browser at 412px wide",
         "Press Import",
@@ -425,62 +468,109 @@
       ],
       "expected": "At least 44x44 CSS px, clear of the home-gesture area.",
       "actual": "36px tall, 6px above the gesture bar, so it is easy to miss or to trigger the gesture instead.",
-      "environment": "Pixel 8 / Android 15 / Chrome 129; also iPhone SE / iOS 18.4 / Safari",
-      "status": "Open",
+      "error_log": [],
+      "code_ref": "src/components/ImportDialog.tsx:212",
+      "root_cause": "The footer applies the desktop button size unconditionally; there is no size override at the phone breakpoint.",
+      "suggested_fix": "Give the footer buttons a min-height of 44px at the mobile breakpoint and add bottom padding clear of the home-gesture area.",
+      "evidence": [
+        "screenshots/bug-01-pixel8.png",
+        "screenshots/bug-01-iphone-se.png"
+      ],
+      "found_in": "feat/ticket-import @ 4f1c9ab",
+      "blocks": [],
       "notes": "The footer uses the desktop button size unconditionally."
     },
     {
       "id": "BUG-02",
       "title": "An unrecognised priority is silently replaced with medium",
+      "area": "CSV parsing",
+      "type": "Data",
       "severity": "Minor",
+      "priority": "P1",
+      "status": "Open",
       "case_id": "TC-06",
-      "steps": ["Import a row whose priority reads \"urgent-ish\"", "Read the preview row"],
+      "detected_by": "cargo test --bin opcode tickets::tests::unknown_priority_is_flagged",
+      "reproducibility": "Always",
+      "platform": "Desktop",
+      "environment": "Desktop / macOS 15.6",
+      "steps": [
+        "Import a row whose priority reads \"urgent-ish\"",
+        "Read the preview row"
+      ],
       "expected": "The preview says the priority was not understood and what it will be instead.",
       "actual": "The preview shows \"medium\" with nothing to say it was substituted, which reads as if the sheet said medium.",
-      "environment": "Desktop / macOS 15.6",
-      "status": "Open",
+      "error_log": [
+        "assertion `left == right` failed: unrecognised priority should be reported",
+        "  left: None",
+        " right: Some(\"could not read priority \\\"urgent-ish\\\"\")"
+      ],
+      "code_ref": "src-tauri/src/commands/tickets.rs:148",
+      "root_cause": "The parser falls back to Priority::Medium and returns no `problem`, so the substitution never reaches the preview.",
+      "suggested_fix": "Set the row's `problem` when the priority word is not recognised, and keep the fallback value.",
+      "evidence": [
+        "logs/tickets-test.txt"
+      ],
+      "found_in": "feat/ticket-import @ 4f1c9ab",
+      "blocks": [],
       "notes": "Same class of problem as the misspelt-heading case, which is reported properly."
     }
   ],
   "coverage": [
     {
       "requirement": "Nothing is created until the person confirms the preview",
-      "case_ids": ["TC-01", "TC-02"],
+      "case_ids": [
+        "TC-01",
+        "TC-02"
+      ],
       "covered": true,
       "gap": "",
       "notes": ""
     },
     {
       "requirement": "A heading that is not understood is named, not ignored",
-      "case_ids": ["TC-03"],
+      "case_ids": [
+        "TC-03"
+      ],
       "covered": true,
       "gap": "",
       "notes": ""
     },
     {
       "requirement": "A bad row is skipped with its reason and does not sink the import",
-      "case_ids": ["TC-04", "TC-05", "TC-06"],
+      "case_ids": [
+        "TC-04",
+        "TC-05",
+        "TC-06"
+      ],
       "covered": true,
       "gap": "",
       "notes": ""
     },
     {
       "requirement": "Every format calamine reads is accepted",
-      "case_ids": ["TC-08"],
+      "case_ids": [
+        "TC-08"
+      ],
       "covered": false,
       "gap": ".ods, .xlsb and .xlsm were not opened in this run - only .csv, .tsv and .xlsx.",
       "notes": ""
     },
     {
       "requirement": "The board is usable from a phone browser",
-      "case_ids": ["TC-12", "TC-13", "TC-14"],
+      "case_ids": [
+        "TC-12",
+        "TC-13",
+        "TC-14"
+      ],
       "covered": true,
       "gap": "",
       "notes": "One failure found; see BUG-01."
     },
     {
       "requirement": "A failed import leaves the board unchanged",
-      "case_ids": ["TC-15"],
+      "case_ids": [
+        "TC-15"
+      ],
       "covered": false,
       "gap": "Blocked - needs a way to interrupt the request part-way through.",
       "notes": ""

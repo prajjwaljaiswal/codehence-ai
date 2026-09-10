@@ -89,6 +89,27 @@ A case: `id`, `area`, `title`, `category`, `priority`, `platform`,
 `preconditions`, `steps`, `test_data`, `expected`, `actual`, `status`,
 `severity`, `automated`, `test_ref`, `defect_id`, `notes`.
 
+A defect: `id`, `title`, `area`, `type`, `severity`, `priority`, `status`,
+`case_id`, `detected_by`, `reproducibility`, `platform`, `environment`,
+`steps`, `expected`, `actual`, `error_log`, `code_ref`, `root_cause`,
+`suggested_fix`, `evidence`, `found_in`, `blocks`, `notes`.
+
+`severity` and `priority` are deliberately separate columns: how bad the
+failure is, and how soon it should be fixed, are different judgements, and a
+sheet that merges them can't be triaged. The Defects sheet sorts worst-first
+on severity, then priority, then id — unrecognised or missing values sort
+last rather than being guessed at, and the id tiebreak keeps two exports of
+one report byte-identical.
+
+`error_log`, `evidence` and `blocks` accept a string or a list, and are
+rendered one part per line **without** numbering — a stack trace or a file
+path has to survive being read and grepped verbatim. `steps` is numbered,
+because a reviewer needs to say "it broke at step 3".
+
+Leave `code_ref`, `root_cause` and `suggested_fix` empty when the code wasn't
+actually read. A blank cell reads as unknown; an invented root cause sends
+the fix in the wrong direction carrying the report's authority.
+
 `status` (and a matrix row's `result`) is read loosely: `pass`, `Passed`,
 `PASS ✅` and `ok` all colour green, and the workbook stores the one canonical
 word so the column filters. A status nobody recognises keeps its own text, is
