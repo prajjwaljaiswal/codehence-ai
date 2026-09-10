@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowLeft, Save, Loader2, ChevronDown, Zap, AlertCircle } from "lucide-react";
+// Zap went with the model picker below; restore it alongside.
+import { ArrowLeft, Save, Loader2, ChevronDown, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -48,7 +49,11 @@ export const CreateAgent: React.FC<CreateAgentProps> = ({
   const [selectedIcon, setSelectedIcon] = useState<AgentIconName>((agent?.icon as AgentIconName) || "bot");
   const [systemPrompt, setSystemPrompt] = useState(agent?.system_prompt || "");
   const [defaultTask, setDefaultTask] = useState(agent?.default_task || "");
-  const [model, setModel] = useState(agent?.model || "sonnet");
+  // Kept as a plain value with the picker hidden: an existing agent keeps
+  // whatever model it was saved with rather than being silently rewritten on
+  // every edit, and a new one gets sonnet. Runs ignore this either way — see
+  // AgentExecution.
+  const model = agent?.model || "sonnet";
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
@@ -235,7 +240,11 @@ export const CreateAgent: React.FC<CreateAgentProps> = ({
                 </div>
               </div>
 
-              {/* Model Selection */}
+              {/* Model selection is hidden while agent runs are pinned to
+                  sonnet in AgentExecution. Leaving the control visible
+                  would let someone pick opus, save it, and get sonnet
+                  anyway. Uncomment both together. */}
+              {/*
               <div className="space-y-2 mt-4">
                 <Label className="text-caption text-muted-foreground">Model</Label>
                 <div className="flex flex-col sm:flex-row gap-2">
@@ -288,6 +297,7 @@ export const CreateAgent: React.FC<CreateAgentProps> = ({
                   </motion.button>
                 </div>
               </div>
+              */}
             </Card>
 
             {/* Configuration */}
