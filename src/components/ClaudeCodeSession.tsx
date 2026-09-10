@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { 
+import {
   Copy,
   ChevronDown,
   GitBranch,
   ChevronUp,
   X,
   Hash,
-  Wrench
+  Wrench,
+  Terminal,
+  Loader2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,6 +33,45 @@ import type { ClaudeStreamMessage } from "./AgentExecution";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTrackEvent, useComponentMetrics, useWorkflowTracking } from "@/hooks";
 import { SessionPersistenceService } from "@/services/sessionPersistence";
+
+/**
+ * A shell command Claude started with `run_in_background`, tracked so the UI
+ * can show it's still running and, once its output file stops growing
+ * (a heuristic for "the process finished"), automatically ask Claude to
+ * check on it and report back — since each prompt runs `claude -p` as a
+ * one-shot process that exits when the turn ends, nothing else would ever
+ * follow up on backgrounded work otherwise.
+ */
+interface BackgroundTask {
+  id: string;
+  outputPath: string;
+  command?: string;
+  description?: string;
+  startedAt: number;
+  status: 'running' | 'checking' | 'done';
+  lastKnownSize: number | null;
+  lastSizeChangeAt: number;
+  stableChecks: number;
+}
+
+/** Extracts plain text from a tool_result block's `content`, which may be a
+ * string, a `{ text }` object, or an array of such blocks. */
+function extractToolResultText(content: any): string {
+  if (typeof content === 'string') return content;
+  if (!content) return '';
+  if (content.text) return content.text;
+  if (Array.isArray(content)) {
+    return content.map((c: any) => (typeof c === 'string' ? c : c.text || '')).join('\n');
+  }
+  return '';
+}
+
+// Matches the Bash tool's own message when a command is started with
+// run_in_background, e.g.:
+//   "Command running in background with ID: b7hvw3exm. Output is being
+//    written to: /private/tmp/.../tasks/b7hvw3exm.output. ..."
+const BACKGROUND_TASK_PATTERN =
+  /running in background with ID:\s*(\S+?)\.[\s\S]*?Output is being written to:\s*(\S+)\.\s/;
 
 interface ClaudeCodeSessionProps {
   /**
@@ -58,6 +99,12 @@ interface ClaudeCodeSessionProps {
    */
   onStreamingChange?: (isStreaming: boolean, sessionId: string | null) => void;
   /**
+   * Called when a turn actually finishes (Claude's `claude-complete`), as
+   * opposed to any change in the shared loading flag — loading session
+   * history flips that too, which must not read as "a response arrived".
+   */
+  onResponseComplete?: (success: boolean) => void;
+  /**
    * Callback when project path changes
    */
   onProjectPathChange?: (path: string) => void;
@@ -74,6 +121,7 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
   initialProjectPath = "",
   className,
   onStreamingChange,
+  onResponseComplete,
   onProjectPathChange,
 }) => {
   const [projectPath] = useState(initialProjectPath || session?.project_path || "");
@@ -115,6 +163,27 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
   const isMountedRef = useRef(true);
   const isListeningRef = useRef(false);
   const sessionStartTime = useRef<number>(Date.now());
+  // Backstop against duplicate stream messages (e.g. a line delivered on both
+  // the generic and session-scoped event channels, or by more than one
+  // listener). Cleared at the start of every new prompt.
+  const seenStreamPayloadsRef = useRef<Set<string>>(new Set());
+  // Auto-scroll bookkeeping: whether the viewport is currently scrolled near
+  // the bottom (if not, the user has scrolled up to read something and
+  // auto-scroll must not yank them back down), and the pending debounce
+  // timer so rapid-fire message arrivals during streaming coalesce into a
+  // single scroll instead of stacking up competing smooth-scroll animations.
+  const isNearBottomRef = useRef(true);
+  const autoScrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Backgrounded shell commands (see BackgroundTask above). `toolUseInfoRef`
+  // remembers each tool_use's name/input by id so that when its matching
+  // tool_result arrives we can recover the original command/description.
+  const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
+  const toolUseInfoRef = useRef<Map<string, { name?: string; input?: any }>>(new Map());
+  // Holds the latest `handleSendPrompt` closure so the background-task
+  // effects (declared before it, further down) can call it without being
+  // re-subscribed on every render.
+  const handleSendPromptRef = useRef<((prompt: string, model: "sonnet" | "opus") => Promise<void>) | null>(null);
   const isIMEComposingRef = useRef(false);
   
   // Session metrics state for enhanced analytics
@@ -273,27 +342,81 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
     onStreamingChange?.(isLoading, claudeSessionId);
   }, [isLoading, claudeSessionId, onStreamingChange]);
 
-  // Auto-scroll to bottom when new messages arrive
+  // Auto-scroll to bottom when new messages arrive.
+  //
+  // During an active response, Claude Code streams many separate messages in
+  // quick succession (assistant text, tool_use, tool_result, ...), each of
+  // which changes `displayableMessages.length` and re-runs this effect.
+  //
+  // The previous version chased TWO different, disagreeing target
+  // positions on every single trigger: `rowVirtualizer.scrollToIndex()`
+  // (computed from each row's estimated/measured height, index by index)
+  // immediately followed by `scrollTop = scrollHeight` (the real, measured
+  // total height). Freshly-appended rows haven't been measured by the
+  // virtualizer yet, so its estimate is routinely off — meaning those two
+  // calls landed at two visibly different scroll positions, one right after
+  // the other. That flip is exactly the "blink" — it's most visible before
+  // the response text exists yet, when rows (System Initialized, a
+  // "Thinking" placeholder, tool cards) are still small/estimated and the
+  // gap between the estimate and the real height is largest.
+  //
+  // Fixed by dropping `scrollToIndex` from this path entirely and only ever
+  // targeting one source of truth — the container's real `scrollHeight` —
+  // plus: (1) only auto-scrolling if the user is already near the bottom,
+  // and (2) debouncing so a burst of rapid messages settles into one scroll
+  // instead of several competing ones.
   useEffect(() => {
-    if (displayableMessages.length > 0) {
-      // Use a more precise scrolling method to ensure content is fully visible
-      setTimeout(() => {
-        const scrollElement = parentRef.current;
-        if (scrollElement) {
-          // First, scroll using virtualizer to get close to the bottom
-          rowVirtualizer.scrollToIndex(displayableMessages.length - 1, { align: 'end', behavior: 'auto' });
-
-          // Then use direct scroll to ensure we reach the absolute bottom
-          requestAnimationFrame(() => {
-            scrollElement.scrollTo({
-              top: scrollElement.scrollHeight,
-              behavior: 'smooth'
-            });
-          });
-        }
-      }, 50);
+    if (displayableMessages.length === 0 || !isNearBottomRef.current) {
+      return;
     }
-  }, [displayableMessages.length, rowVirtualizer]);
+
+    if (autoScrollTimeoutRef.current) {
+      clearTimeout(autoScrollTimeoutRef.current);
+    }
+
+    autoScrollTimeoutRef.current = setTimeout(() => {
+      autoScrollTimeoutRef.current = null;
+      const scrollElement = parentRef.current;
+      if (!scrollElement || !isNearBottomRef.current) return;
+
+      scrollElement.scrollTop = scrollElement.scrollHeight;
+
+      // The just-appended row may not be measured yet (still using the
+      // virtualizer's estimated height), so scrollHeight can grow slightly
+      // once it settles. Re-apply the same target — not a different one —
+      // after that layout pass so we land exactly at the bottom without a
+      // second, visually-different jump.
+      requestAnimationFrame(() => {
+        if (!parentRef.current || !isNearBottomRef.current) return;
+        parentRef.current.scrollTop = parentRef.current.scrollHeight;
+      });
+    }, 50);
+
+    return () => {
+      if (autoScrollTimeoutRef.current) {
+        clearTimeout(autoScrollTimeoutRef.current);
+        autoScrollTimeoutRef.current = null;
+      }
+    };
+  }, [displayableMessages.length]);
+
+  // Track whether the viewport is near the bottom, so the effect above knows
+  // when to back off and let the user read earlier content in peace.
+  useEffect(() => {
+    const scrollElement = parentRef.current;
+    if (!scrollElement) return;
+
+    const NEAR_BOTTOM_THRESHOLD_PX = 120;
+    const handleScroll = () => {
+      const distanceFromBottom =
+        scrollElement.scrollHeight - scrollElement.scrollTop - scrollElement.clientHeight;
+      isNearBottomRef.current = distanceFromBottom <= NEAR_BOTTOM_THRESHOLD_PX;
+    };
+
+    handleScroll();
+    scrollElement.addEventListener('scroll', handleScroll, { passive: true });
+    return () => scrollElement.removeEventListener('scroll', handleScroll);
+  }, []);
 
   // Calculate total tokens from messages
   useEffect(() => {
@@ -340,18 +463,18 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
       // After loading history, we're continuing a conversation
       setIsFirstPrompt(false);
       
-      // Scroll to bottom after loading history
+      // Scroll to bottom after loading history. Same single-source-of-truth
+      // approach as the live auto-scroll effect above — see its comment for
+      // why mixing scrollToIndex with scrollHeight causes a visible jump.
       setTimeout(() => {
         if (loadedMessages.length > 0) {
           const scrollElement = parentRef.current;
           if (scrollElement) {
-            // Use the same improved scrolling method
-            rowVirtualizer.scrollToIndex(loadedMessages.length - 1, { align: 'end', behavior: 'auto' });
+            scrollElement.scrollTop = scrollElement.scrollHeight;
             requestAnimationFrame(() => {
-              scrollElement.scrollTo({
-                top: scrollElement.scrollHeight,
-                behavior: 'auto'
-              });
+              if (parentRef.current) {
+                parentRef.current.scrollTop = parentRef.current.scrollHeight;
+              }
             });
           }
         }
@@ -443,6 +566,9 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
       if (isMountedRef.current) {
         setIsLoading(false);
         hasActiveSessionRef.current = false;
+        // A response finished for a session we reattached to — same signal
+        // as the normal path, so it notifies/badges too
+        onResponseComplete?.(event.payload !== false);
       }
     });
 
@@ -480,7 +606,8 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
       setIsLoading(true);
       setError(null);
       hasActiveSessionRef.current = true;
-      
+      seenStreamPayloadsRef.current.clear();
+
       // For resuming sessions, ensure we have the session ID
       if (effectiveSession && !claudeSessionId) {
         setClaudeSessionId(effectiveSession.id);
@@ -511,6 +638,15 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
         console.log('[ClaudeCodeSession] Setting up generic event listeners first');
 
         let currentSessionId: string | null = claudeSessionId || effectiveSession?.id || null;
+        // Tracks whether we've switched this turn's listening to the
+        // session-scoped channels yet. Must NOT be inferred from "did the
+        // session id change", because a *resumed* session already knows its
+        // id up front — Claude's init message reports that same id, so an
+        // id-equality check would never fire and we'd stay on the generic
+        // channel. The backend only broadcasts on the generic channel until
+        // it learns the session id, then switches to scoped-only emission,
+        // so we must switch too, unconditionally, the first time we see it.
+        let hasSwitchedToScopedListeners = false;
 
         // Helper to attach session-specific listeners **once we are sure**
         const attachSessionSpecificListeners = async (sid: string) => {
@@ -542,9 +678,11 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
           // Attempt to extract session_id on the fly (for the very first init)
           try {
             const msg = JSON.parse(event.payload) as ClaudeStreamMessage;
-            if (msg.type === 'system' && msg.subtype === 'init' && msg.session_id) {
+            if (msg.type === 'system' && msg.subtype === 'init' && msg.session_id && !hasSwitchedToScopedListeners) {
+              hasSwitchedToScopedListeners = true;
+              console.log('[ClaudeCodeSession] Detected session_id from generic listener:', msg.session_id);
+
               if (!currentSessionId || currentSessionId !== msg.session_id) {
-                console.log('[ClaudeCodeSession] Detected new session_id from generic listener:', msg.session_id);
                 currentSessionId = msg.session_id;
                 setClaudeSessionId(msg.session_id);
 
@@ -552,7 +690,7 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
                 if (!extractedSessionInfo) {
                   const projectId = projectPath.replace(/[^a-zA-Z0-9]/g, '-');
                   setExtractedSessionInfo({ sessionId: msg.session_id, projectId });
-                  
+
                   // Save session data for restoration
                   SessionPersistenceService.saveSession(
                     msg.session_id,
@@ -561,10 +699,13 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
                     messages.length
                   );
                 }
-
-                // Switch to session-specific listeners
-                await attachSessionSpecificListeners(msg.session_id);
               }
+
+              // Switch to session-specific listeners. This must happen even
+              // when the session id didn't change (a resumed session), since
+              // the backend stops broadcasting on the generic channel as
+              // soon as it knows the session id.
+              await attachSessionSpecificListeners(msg.session_id);
             }
           } catch {
             /* ignore parse errors */
@@ -590,6 +731,14 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
               rawPayload = JSON.stringify(payload);
             }
             
+            // Drop exact duplicates of a line we've already processed this turn
+            // (can happen when the same line arrives on both the generic and
+            // session-scoped event channels, or via more than one listener).
+            if (seenStreamPayloadsRef.current.has(rawPayload)) {
+              return;
+            }
+            seenStreamPayloadsRef.current.add(rawPayload);
+
             console.log('[ClaudeCodeSession] handleStreamMessage - message type:', message.type);
 
             // Store raw JSONL
@@ -599,6 +748,10 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
             if (message.type === 'assistant' && message.message?.content) {
               const toolUses = message.message.content.filter((c: any) => c.type === 'tool_use');
               toolUses.forEach((toolUse: any) => {
+                if (toolUse.id) {
+                  toolUseInfoRef.current.set(toolUse.id, { name: toolUse.name, input: toolUse.input });
+                }
+
                 // Increment tools executed counter
                 sessionMetrics.current.toolsExecuted += 1;
                 sessionMetrics.current.lastActivityTime = Date.now();
@@ -623,6 +776,36 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
               const toolResults = message.message.content.filter((c: any) => c.type === 'tool_result');
               toolResults.forEach((result: any) => {
                 const isError = result.is_error || false;
+
+                // Detect a backgrounded shell command starting up, so it can
+                // be tracked and auto-checked-on once it finishes.
+                if (!isError) {
+                  const resultText = extractToolResultText(result.content);
+                  const match = resultText.match(BACKGROUND_TASK_PATTERN);
+                  if (match) {
+                    const [, taskId, outputPath] = match;
+                    const toolInfo = result.tool_use_id ? toolUseInfoRef.current.get(result.tool_use_id) : undefined;
+                    setBackgroundTasks((prev) => {
+                      if (prev.some((t) => t.id === taskId)) return prev;
+                      const now = Date.now();
+                      return [
+                        ...prev,
+                        {
+                          id: taskId,
+                          outputPath,
+                          command: toolInfo?.input?.command,
+                          description: toolInfo?.input?.description,
+                          startedAt: now,
+                          status: 'running',
+                          lastKnownSize: null,
+                          lastSizeChangeAt: now,
+                          stableChecks: 0,
+                        },
+                      ];
+                    });
+                  }
+                }
+
                 // Note: We don't have execution time here, but we can track success/failure
                 if (isError) {
                   sessionMetrics.current.toolsFailed += 1;
@@ -673,7 +856,11 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
           setIsLoading(false);
           hasActiveSessionRef.current = false;
           isListeningRef.current = false; // Reset listening state
-          
+
+          // A real turn just ended — this is the signal the tab layer uses to
+          // notify/badge, so it fires here rather than off the loading flag.
+          onResponseComplete?.(success);
+
           // Track enhanced session stopped metrics when session completes
           if (effectiveSession && claudeSessionId) {
             const sessionStartTimeValue = messages.length > 0 ? messages[0].timestamp || Date.now() : Date.now();
@@ -859,6 +1046,89 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
       hasActiveSessionRef.current = false;
     }
   };
+
+  // Keep the ref in sync every render so the effects below always call the
+  // current closure (which captures the current messages/session state).
+  handleSendPromptRef.current = handleSendPrompt;
+
+  const BACKGROUND_TASK_POLL_INTERVAL_MS = 6000;
+  const BACKGROUND_TASK_STABLE_CHECKS_REQUIRED = 2;
+  const BACKGROUND_TASK_MIN_RUNTIME_MS = 5000;
+
+  // Poll each tracked background task's output file size. No growth across
+  // a couple of polls is our (heuristic) signal that the backgrounded shell
+  // command has finished — there's no other reliable way to know from
+  // outside the process once the `claude -p` turn that started it has
+  // already exited.
+  useEffect(() => {
+    if (!backgroundTasks.some((t) => t.status === 'running')) return;
+
+    const interval = setInterval(async () => {
+      // Don't poll mid-turn — avoid racing the auto-check prompt (or any
+      // user prompt) against an already in-flight one.
+      if (isLoading) return;
+
+      const runningTasks = backgroundTasks.filter(
+        (t) => t.status === 'running' && Date.now() - t.startedAt >= BACKGROUND_TASK_MIN_RUNTIME_MS
+      );
+      for (const task of runningTasks) {
+        try {
+          const size = await api.getBackgroundTaskFileSize(task.outputPath);
+          setBackgroundTasks((prev) =>
+            prev.map((t) => {
+              if (t.id !== task.id) return t;
+              const grew = size !== null && size !== t.lastKnownSize;
+              return grew
+                ? { ...t, lastKnownSize: size, lastSizeChangeAt: Date.now(), stableChecks: 0 }
+                : { ...t, stableChecks: t.stableChecks + 1 };
+            })
+          );
+        } catch (err) {
+          console.error('[ClaudeCodeSession] Failed to poll background task output:', err);
+        }
+      }
+    }, BACKGROUND_TASK_POLL_INTERVAL_MS);
+
+    return () => clearInterval(interval);
+  }, [backgroundTasks, isLoading]);
+
+  // Once a task's output has looked stable for long enough, automatically
+  // resume the session with a prompt asking Claude to check on it and
+  // report the result — this is what actually fulfills the "I'll let you
+  // know when it's done" promise the CLI can't keep on its own in one-shot
+  // (`-p`) mode.
+  useEffect(() => {
+    if (isLoading) return;
+    const readyTask = backgroundTasks.find(
+      (t) => t.status === 'running' && t.stableChecks >= BACKGROUND_TASK_STABLE_CHECKS_REQUIRED
+    );
+    if (!readyTask) return;
+
+    setBackgroundTasks((prev) =>
+      prev.map((t) => (t.id === readyTask.id ? { ...t, status: 'checking' } : t))
+    );
+
+    const metrics = sessionMetrics.current;
+    const model = metrics.modelChanges.length > 0
+      ? metrics.modelChanges[metrics.modelChanges.length - 1].to
+      : 'sonnet';
+
+    const prompt = [
+      "The background command you started earlier looks like it's finished — its output file hasn't grown in a while.",
+      '',
+      `Command ID: ${readyTask.id}`,
+      `Output file: ${readyTask.outputPath}`,
+      readyTask.command ? `Command: ${readyTask.command}` : null,
+      '',
+      "Please check on it (read the output file and/or confirm the process has exited) and report back: did it succeed or fail, and what's the key result? If it's actually still running, just say so briefly.",
+    ].filter(Boolean).join('\n');
+
+    handleSendPromptRef.current?.(prompt, model as "sonnet" | "opus").finally(() => {
+      setBackgroundTasks((prev) =>
+        prev.map((t) => (t.id === readyTask.id ? { ...t, status: 'done' } : t))
+      );
+    });
+  }, [backgroundTasks, isLoading]);
 
   const handleCopyAsJsonl = async () => {
     const jsonl = rawJsonlOutput.join('\n');
@@ -1135,15 +1405,29 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
     }
   };
 
-  // Cleanup event listeners and track mount state
+  // Cleanup event listeners strictly on true component unmount. This is
+  // intentionally a separate, dependency-free effect: the previous version
+  // was keyed on [effectiveSession, projectPath], whose identity changes the
+  // moment a brand-new session's ID is first discovered mid-stream (see
+  // handleSendPrompt above). That caused this cleanup to tear down the
+  // just-attached, live listeners in the middle of an in-flight response —
+  // without anything re-attaching them — cutting the stream short.
   useEffect(() => {
     isMountedRef.current = true;
-    
+
     return () => {
       console.log('[ClaudeCodeSession] Component unmounting, cleaning up listeners');
       isMountedRef.current = false;
       isListeningRef.current = false;
-      
+      unlistenRefs.current.forEach(unlisten => unlisten());
+      unlistenRefs.current = [];
+    };
+  }, []);
+
+  // Track session-completion analytics and clear the checkpoint manager
+  // whenever the effective session identity changes (or on unmount).
+  useEffect(() => {
+    return () => {
       // Track session completion with engagement metrics
       if (effectiveSession) {
         trackEvent.sessionCompleted();
@@ -1174,11 +1458,7 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
           engagement_score: Math.round(engagementScore)
         });
       }
-      
-      // Clean up listeners
-      unlistenRefs.current.forEach(unlisten => unlisten());
-      unlistenRefs.current = [];
-      
+
       // Clear checkpoint manager when session ends
       if (effectiveSession) {
         api.clearCheckpointManager(effectiveSession.id).catch(err => {
@@ -1395,6 +1675,48 @@ export const ClaudeCodeSession: React.FC<ClaudeCodeSessionProps> = ({
                           <X className="h-3 w-3" />
                         </Button>
                       </motion.div>
+                    </motion.div>
+                  ))}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Background Shell Commands Display */}
+          <AnimatePresence>
+            {backgroundTasks.some((t) => t.status !== 'done') && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 20 }}
+                className="fixed bottom-24 left-1/2 -translate-x-1/2 z-30 w-full max-w-3xl px-4"
+              >
+                <div className="bg-background/95 backdrop-blur-md border rounded-lg shadow-lg p-3 space-y-2">
+                  <div className="text-xs font-medium text-muted-foreground mb-1">
+                    Background Commands
+                  </div>
+                  {backgroundTasks.filter((t) => t.status !== 'done').map((task) => (
+                    <motion.div
+                      key={task.id}
+                      initial={{ opacity: 0, y: 4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -4 }}
+                      className="flex items-center gap-2 bg-muted/50 rounded-md p-2"
+                    >
+                      <Terminal className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm truncate">{task.description || task.command || task.id}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {task.status === 'checking'
+                            ? 'Finished — asking Claude to confirm...'
+                            : `Running for ${Math.max(1, Math.round((Date.now() - task.startedAt) / 1000))}s`}
+                        </p>
+                      </div>
+                      {task.status === 'checking' ? (
+                        <Loader2 className="h-3.5 w-3.5 flex-shrink-0 animate-spin text-primary" />
+                      ) : (
+                        <div className="h-2 w-2 bg-green-500 rounded-full animate-pulse flex-shrink-0" />
+                      )}
                     </motion.div>
                   ))}
                 </div>

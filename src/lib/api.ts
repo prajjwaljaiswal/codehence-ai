@@ -387,6 +387,53 @@ export interface MCPServerConfig {
   env: Record<string, string>;
 }
 
+/** What Claude has to do to read an attached file */
+export type AttachmentKind = "image" | "pdf" | "text" | "converted" | "unsupported";
+
+/**
+ * A file attached to a prompt, resolved to a path Claude can read
+ */
+export interface Attachment {
+  /** The file the user picked */
+  original_path: string;
+  /** Path to reference in the prompt — differs from original_path only when converted */
+  read_path: string;
+  /** Base file name, for display */
+  file_name: string;
+  kind: AttachmentKind;
+  /** Size of the original file in bytes */
+  size_bytes: number;
+  /** Explanation when a file was converted, or why it can't be used */
+  note?: string;
+}
+
+/**
+ * Represents an agent skill — a `SKILL.md` (plus optional supporting files)
+ * in its own directory under `.claude/skills/<name>/`
+ */
+export interface Skill {
+  /** Unique identifier ("<scope>-<name>") */
+  id: string;
+  /** Skill name — the directory name, which is what `/<name>` resolves to */
+  name: string;
+  /** The `name:` in frontmatter, only set when it disagrees with the directory name */
+  frontmatter_name?: string;
+  /** Description from frontmatter — what Claude reads to decide relevance */
+  description?: string;
+  /** Skill scope: "project" or "user" */
+  scope: string;
+  /** Absolute path to the SKILL.md file */
+  file_path: string;
+  /** Absolute path to the skill's directory */
+  directory_path: string;
+  /** Markdown body (frontmatter stripped) */
+  content: string;
+  /** `allowed-tools` from frontmatter */
+  allowed_tools: string[];
+  /** Other files bundled with the skill, relative to its directory */
+  supporting_files: string[];
+}
+
 /**
  * Represents a custom slash command
  */
@@ -1561,6 +1608,15 @@ export const api = {
   },
 
   /**
+   * Gets the current size (in bytes) of a background-task output file, or
+   * null if it doesn't exist yet. Used to poll whether a backgrounded shell
+   * command is still writing output.
+   */
+  async getBackgroundTaskFileSize(path: string): Promise<number | null> {
+    return apiCall("get_background_task_file_size", { path });
+  },
+
+  /**
    * Lists files and directories in a given path
    */
   async listDirectoryContents(directoryPath: string): Promise<FileEntry[]> {
@@ -2427,6 +2483,129 @@ export const api = {
       return await apiCall<string>("slash_command_delete", { commandId, projectPath });
     } catch (error) {
       console.error("Failed to delete slash command:", error);
+      throw error;
+    }
+  },
+
+  // Desktop notifications & app icon badge
+
+  /**
+   * Shows an OS desktop notification.
+   * @param title - Notification title
+   * @param body - Notification body text
+   */
+  async showDesktopNotification(title: string, body: string): Promise<void> {
+    try {
+      return await apiCall<void>("show_desktop_notification", { title, body });
+    } catch (error) {
+      console.error("Failed to show notification:", error);
+      throw error;
+    }
+  },
+
+  /**
+   * Sets the badge count on the app icon (dock badge on macOS).
+   * @param count - Pending count; 0 or null clears the badge
+   */
+  async setAppBadgeCount(count: number | null): Promise<void> {
+    try {
+      return await apiCall<void>("set_app_badge_count", { count });
+    } catch (error) {
+      console.error("Failed to set badge count:", error);
+      throw error;
+    }
+  },
+
+  // Prompt attachments
+
+  /**
+   * Resolves a file the user attached into a path Claude can actually read,
+   * converting binary document formats (.doc/.docx/.rtf) to a plain-text
+   * sidecar when needed. Does not copy or move the original file.
+   * @param path - Absolute path of the attached file
+   */
+  async prepareAttachment(path: string): Promise<Attachment> {
+    try {
+      return await apiCall<Attachment>("prepare_attachment", { path });
+    } catch (error) {
+      console.error("Failed to prepare attachment:", error);
+      throw error;
+    }
+  },
+
+  // Skills API methods
+
+  /**
+   * Lists all available skills (project skills first, then user skills)
+   * @param projectPath - Optional project path to include project-scoped skills
+   * @returns Promise resolving to array of skills
+   */
+  async skillsList(projectPath?: string): Promise<Skill[]> {
+    try {
+      return await apiCall<Skill[]>("skills_list", { projectPath });
+    } catch (error) {
+      console.error("Failed to list skills:", error);
+      throw error;
+    }
+  },
+
+  /**
+   * Gets a single skill by ID
+   * @param skillId - Unique identifier of the skill
+   * @param projectPath - Required to resolve project-scoped skills
+   */
+  async skillGet(skillId: string, projectPath?: string): Promise<Skill> {
+    try {
+      return await apiCall<Skill>("skill_get", { skillId, projectPath });
+    } catch (error) {
+      console.error("Failed to get skill:", error);
+      throw error;
+    }
+  },
+
+  /**
+   * Creates or updates a skill at `<scope>/.claude/skills/<name>/SKILL.md`
+   * @param scope - "project" or "user"
+   * @param name - Skill name (lowercase kebab-case; becomes the directory name)
+   * @param description - What the skill does and when to use it (required —
+   *                      this is what Claude reads to decide relevance)
+   * @param content - Markdown instructions body
+   * @param allowedTools - Optional tool restriction list
+   * @param projectPath - Required for project scope
+   */
+  async skillSave(
+    scope: string,
+    name: string,
+    description: string,
+    content: string,
+    allowedTools: string[],
+    projectPath?: string
+  ): Promise<Skill> {
+    try {
+      return await apiCall<Skill>("skill_save", {
+        scope,
+        name,
+        description,
+        content,
+        allowedTools,
+        projectPath
+      });
+    } catch (error) {
+      console.error("Failed to save skill:", error);
+      throw error;
+    }
+  },
+
+  /**
+   * Deletes a skill, including its whole directory and supporting files
+   * @param skillId - Unique identifier of the skill to delete
+   * @param projectPath - Required for project-scoped skills
+   */
+  async skillDelete(skillId: string, projectPath?: string): Promise<string> {
+    try {
+      return await apiCall<string>("skill_delete", { skillId, projectPath });
+    } catch (error) {
+      console.error("Failed to delete skill:", error);
       throw error;
     }
   },

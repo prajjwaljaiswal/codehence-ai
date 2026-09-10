@@ -5,15 +5,17 @@
 import React, { useState, useEffect } from 'react';
 import { HooksEditor } from '@/components/HooksEditor';
 import { SlashCommandsManager } from '@/components/SlashCommandsManager';
+import { SkillsManager } from '@/components/SkillsManager';
 import { api } from '@/lib/api';
-import { 
-  AlertTriangle, 
-  ArrowLeft, 
+import {
+  AlertTriangle,
+  ArrowLeft,
   Settings,
   FolderOpen,
   GitBranch,
   Shield,
-  Command
+  Command,
+  Sparkles
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -112,6 +114,10 @@ export const ProjectSettings: React.FC<ProjectSettingsProps> = ({
                 <Command className="h-4 w-4" />
                 Slash Commands
               </TabsTrigger>
+              <TabsTrigger value="skills" className="gap-2">
+                <Sparkles className="h-4 w-4" />
+                Skills
+              </TabsTrigger>
               <TabsTrigger value="project" className="gap-2">
                 <GitBranch className="h-4 w-4" />
                 Project Hooks
@@ -135,6 +141,26 @@ export const ProjectSettings: React.FC<ProjectSettingsProps> = ({
                   </div>
                   
                   <SlashCommandsManager
+                    projectPath={project.path}
+                    scopeFilter="project"
+                  />
+                </div>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="skills" className="space-y-6">
+              <Card className="p-6">
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="text-lg font-semibold mb-2">Project Skills</h3>
+                    <p className="text-sm text-muted-foreground mb-4">
+                      Reusable instructions Claude loads when a task matches. Stored in
+                      <code className="mx-1 px-2 py-1 bg-muted rounded text-xs">.claude/skills/&lt;name&gt;/SKILL.md</code>
+                      and can be committed to version control.
+                    </p>
+                  </div>
+
+                  <SkillsManager
                     projectPath={project.path}
                     scopeFilter="project"
                   />

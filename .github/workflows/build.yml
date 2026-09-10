@@ -1,0 +1,79 @@
+name: Build installers
+
+# Windows installers can't be cross-compiled from macOS (the bundler needs the
+# MSVC toolchain, the Windows SDK and WebView2), so the .exe is produced on a
+# Windows runner here. Run this workflow manually to get build artifacts, or
+# push a v* tag to also publish them to a GitHub Release.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            build_script: build:exe
+            artifact_name: windows-installer
+            artifact_path: |
+              src-tauri/target/release/bundle/nsis/*-setup.exe
+              src-tauri/target/release/*.exe
+          - platform: macos-latest
+            build_script: build:dmg
+            artifact_name: macos-dmg
+            artifact_path: src-tauri/target/release/bundle/dmg/*.dmg
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Cargo's build cache — a cold Tauri build is several minutes
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      # Not --frozen-lockfile on purpose: the repo carries bun.lock,
+      # bun.lockb and package-lock.json, and a stale one shouldn't fail CI.
+      - name: Install frontend dependencies
+        run: bun install
+
+      # Uses the same package.json scripts as a local build, so CI and local
+      # builds can't drift. tauri.conf.json's beforeBuildCommand runs
+      # `bun run build` (tsc + vite), so the frontend is built here too.
+      - name: Build (${{ matrix.build_script }})
+        run: bun run ${{ matrix.build_script }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: error
+
+  release:
+    # Only publish a Release for tag pushes; manual runs just leave artifacts
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          draft: true
+          generate_release_notes: true

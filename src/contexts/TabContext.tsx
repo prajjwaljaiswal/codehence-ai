@@ -1,6 +1,7 @@
 import React, { createContext, useState, useContext, useCallback, useEffect, useRef } from 'react';
 import { TabPersistenceService } from '@/services/tabPersistence';
 import { SessionPersistenceService } from '@/services/sessionPersistence';
+import { api } from '@/lib/api';
 
 export interface Tab {
   id: string;
@@ -14,6 +15,9 @@ export interface Tab {
   initialProjectPath?: string; // for chat tabs
   projectPath?: string; // for agent-execution and tasks tabs
   status: 'active' | 'idle' | 'running' | 'complete' | 'error';
+  /** A response finished while this tab was in the background — drives the
+   *  tab's unread dot and the app icon's badge count until it's viewed */
+  hasUnreadResponse?: boolean;
   hasUnsavedChanges: boolean;
   order: number;
   icon?: string;
@@ -32,6 +36,11 @@ interface TabContextType {
   getTabById: (id: string) => Tab | undefined;
   closeAllTabs: () => void;
   getTabsByType: (type: 'chat' | 'agent') => Tab[];
+  /** Flag a tab as having a response the user hasn't seen, and notify them.
+   *  No-ops when the tab is already visible to the user. */
+  notifyTabResponseReady: (id: string) => void;
+  /** Number of tabs with responses the user hasn't looked at yet */
+  unreadResponseCount: number;
 }
 
 const TabContext = createContext<TabContextType | undefined>(undefined);
@@ -44,6 +53,25 @@ export const TabProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const isInitialized = useRef(false);
   const saveTimeoutRef = useRef<NodeJS.Timeout>();
+
+  // Mirrors of the state above, for callbacks that must read the current
+  // values without being re-created (and re-subscribed) on every change.
+  const tabsRef = useRef<Tab[]>(tabs);
+  tabsRef.current = tabs;
+  const activeTabIdRef = useRef<string | null>(activeTabId);
+  activeTabIdRef.current = activeTabId;
+  const isWindowFocusedRef = useRef(
+    typeof document === 'undefined' ? true : document.hasFocus()
+  );
+
+  const unreadResponseCount = tabs.filter(tab => tab.hasUnreadResponse).length;
+
+  // Keep the app icon's badge in step with the unread count
+  useEffect(() => {
+    api.setAppBadgeCount(unreadResponseCount || null).catch(err =>
+      console.error('Failed to update app badge count:', err)
+    );
+  }, [unreadResponseCount]);
 
   // Load tabs from storage on mount
   useEffect(() => {
@@ -185,20 +213,54 @@ export const TabProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [activeTabId]);
 
   const updateTab = useCallback((id: string, updates: Partial<Tab>) => {
-    setTabs(prevTabs => 
-      prevTabs.map(tab => 
-        tab.id === id 
+    setTabs(prevTabs =>
+      prevTabs.map(tab =>
+        tab.id === id
           ? { ...tab, ...updates, updatedAt: new Date() }
           : tab
       )
     );
   }, []);
 
+  const clearUnread = useCallback((id: string) => {
+    setTabs(prevTabs => {
+      if (!prevTabs.some(tab => tab.id === id && tab.hasUnreadResponse)) {
+        return prevTabs; // Nothing to clear — don't churn state
+      }
+      return prevTabs.map(tab =>
+        tab.id === id ? { ...tab, hasUnreadResponse: false } : tab
+      );
+    });
+  }, []);
+
+  /**
+   * Called when a session finishes responding. If the user can already see
+   * that tab (it's active and the window is focused) there's nothing to
+   * announce; otherwise flag it unread and post a desktop notification.
+   */
+  const notifyTabResponseReady = useCallback((id: string) => {
+    const tab = tabsRef.current.find(t => t.id === id);
+    if (!tab) return;
+
+    const userIsLookingAtIt = isWindowFocusedRef.current && activeTabIdRef.current === id;
+    if (userIsLookingAtIt) return;
+
+    setTabs(prevTabs =>
+      prevTabs.map(t => (t.id === id ? { ...t, hasUnreadResponse: true } : t))
+    );
+
+    api
+      .showDesktopNotification('Response ready', `Claude finished responding in ${tab.title}`)
+      .catch(err => console.error('Failed to post response notification:', err));
+  }, []);
+
   const setActiveTab = useCallback((id: string) => {
     if (tabs.find(tab => tab.id === id)) {
       setActiveTabId(id);
+      // Looking at a tab counts as reading it
+      clearUnread(id);
     }
-  }, [tabs]);
+  }, [tabs, clearUnread]);
 
   const reorderTabs = useCallback((startIndex: number, endIndex: number) => {
     setTabs(prevTabs => {
@@ -228,6 +290,28 @@ export const TabProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return tabs.filter(tab => tab.type === type);
   }, [tabs]);
 
+  // Track window focus, so a response that lands while the app is in the
+  // background still counts as unread — and so returning to the app marks
+  // whatever tab is on screen as read.
+  useEffect(() => {
+    const handleFocus = () => {
+      isWindowFocusedRef.current = true;
+      if (activeTabIdRef.current) {
+        clearUnread(activeTabIdRef.current);
+      }
+    };
+    const handleBlur = () => {
+      isWindowFocusedRef.current = false;
+    };
+
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, [clearUnread]);
+
   const value: TabContextType = {
     tabs,
     activeTabId,
@@ -238,7 +322,9 @@ export const TabProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     reorderTabs,
     getTabById,
     closeAllTabs,
-    getTabsByType
+    getTabsByType,
+    notifyTabResponseReady,
+    unreadResponseCount
   };
 
   return (

@@ -20,9 +20,10 @@ use commands::agents::{
 use commands::claude::{
     cancel_claude_execution, check_auto_checkpoint, check_claude_version, cleanup_old_checkpoints,
     clear_checkpoint_manager, continue_claude_code, create_checkpoint, create_project,
-    execute_claude_code, find_claude_md_files, fork_from_checkpoint, get_checkpoint_diff,
-    get_checkpoint_settings, get_checkpoint_state_stats, get_claude_session_output,
-    get_claude_settings, get_home_directory, get_hooks_config, get_project_sessions,
+    execute_claude_code, find_claude_md_files, fork_from_checkpoint, get_background_task_file_size,
+    get_checkpoint_diff, get_checkpoint_settings, get_checkpoint_state_stats,
+    get_claude_session_output, get_claude_settings, get_home_directory, get_hooks_config,
+    get_project_sessions,
     get_recently_modified_files, get_session_timeline, get_system_prompt, list_checkpoints,
     list_directory_contents, list_projects, list_running_claude_sessions, load_session_history,
     open_new_session, read_claude_md_file, restore_checkpoint, resume_claude_code,
@@ -58,6 +59,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             // Initialize agents database
             let conn = init_database(&app.handle()).expect("Failed to initialize agents database");
@@ -213,6 +215,7 @@ fn main() {
             cancel_claude_execution,
             list_running_claude_sessions,
             get_claude_session_output,
+            get_background_task_file_size,
             list_directory_contents,
             search_files,
             get_recently_modified_files,
@@ -294,6 +297,16 @@ fn main() {
             commands::slash_commands::slash_command_get,
             commands::slash_commands::slash_command_save,
             commands::slash_commands::slash_command_delete,
+            // Prompt attachments
+            commands::attachments::prepare_attachment,
+            // Desktop notifications & app icon badge
+            commands::notifications::show_desktop_notification,
+            commands::notifications::set_app_badge_count,
+            // Skills
+            commands::skills::skills_list,
+            commands::skills::skill_get,
+            commands::skills::skill_save,
+            commands::skills::skill_delete,
             // Proxy Settings
             get_proxy_settings,
             save_proxy_settings,

@@ -1,8 +1,11 @@
 pub mod agents;
+pub mod attachments;
 pub mod claude;
 pub mod git;
 pub mod mcp;
+pub mod notifications;
 pub mod proxy;
+pub mod skills;
 pub mod slash_commands;
 pub mod storage;
 pub mod tickets;
