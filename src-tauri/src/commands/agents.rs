@@ -388,7 +388,13 @@ const BUILTIN_AGENTS_SEEDED_KEY: &str = "builtin_agents_seeded_version";
 /// Bump this whenever a file in `cc_agents/` changes, so existing
 /// installations pick the new version up. Without a bump, a prompt change
 /// only ever reaches brand-new installs.
-const BUILTIN_AGENTS_VERSION: u32 = 2;
+/// Revision history, since the numbers carry migration meaning:
+///   1 — first seeding release; installed agents but recorded no fingerprints
+///   2 — added fingerprints and the granular defect prompt, but read a
+///       missing fingerprint as a user edit, which would have stranded every
+///       v1 install on v1's prompts
+///   3 — same agents as 2, with that migration fixed
+const BUILTIN_AGENTS_VERSION: u32 = 3;
 
 /// Prefix for the per-agent fingerprint of what we last wrote
 const BUILTIN_AGENT_FINGERPRINT_PREFIX: &str = "builtin_agent_fingerprint:";
@@ -436,6 +442,10 @@ fn seed_builtin_agents(conn: &Connection) -> SqliteResult<()> {
         return Ok(());
     }
     let first_run = installed_version == 0;
+    // Version 1 installed agents but recorded no per-agent fingerprint, so
+    // its rows can only be recognised by that absence. See the `is_ours`
+    // decision below.
+    let seeded_before_fingerprints = installed_version == 1;
 
     let mut inserted = 0;
     let mut updated = 0;
@@ -500,10 +510,23 @@ fn seed_builtin_agents(conn: &Connection) -> SqliteResult<()> {
                 let current =
                     builtin_agent_fingerprint(&current_prompt, &current_task, &current_model);
 
-                // Untouched since we wrote it, so ours to update. A row with no
-                // recorded fingerprint predates this tracking (or was created
-                // by hand under the same name) and is treated as the user's.
-                if previous.as_deref() == Some(current.as_str()) {
+                // Untouched since we wrote it, so ours to update.
+                //
+                // With no fingerprint recorded we can't tell "as shipped" from
+                // "edited", and which way to guess depends on where the row
+                // came from. Version 1 seeded agents without recording any
+                // fingerprint, so every agent on such an install has none —
+                // reading those as edited would strand all of them on v1's
+                // prompts forever, which is the exact failure this versioning
+                // exists to prevent. Past that one release a missing
+                // fingerprint means the row is not ours (hand-made under the
+                // same name, or already handed over), and is left alone.
+                let is_ours = match previous.as_deref() {
+                    Some(recorded) => recorded == current,
+                    None => seeded_before_fingerprints,
+                };
+
+                if is_ours {
                     if current == fingerprint {
                         continue;
                     }
@@ -2298,10 +2321,15 @@ mod tests {
 
     /// Rewinds the recorded version so the next call takes the upgrade path,
     /// as it would after the app is updated with new bundled agents.
+    ///
+    /// Deliberately 2, not 1: version 1 is the one release whose rows carry no
+    /// fingerprint and so get the migration allowance. Rewinding to it would
+    /// mean every test here exercised that one-off path instead of the normal
+    /// upgrade.
     fn pretend_older_version(conn: &Connection) {
         conn.execute(
             "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
-            params![BUILTIN_AGENTS_SEEDED_KEY, "1"],
+            params![BUILTIN_AGENTS_SEEDED_KEY, "2"],
         )
         .unwrap();
     }
@@ -2356,6 +2384,58 @@ mod tests {
             shipped,
             "an unmodified bundled agent should pick up the new prompt"
         );
+    }
+
+    #[test]
+    fn agents_seeded_by_version_1_pick_up_the_new_prompts() {
+        // Version 1 shipped seeding with no per-agent fingerprints. Every
+        // install from it therefore has agents with none, and reading those as
+        // user-edited would strand the whole installed base on v1's prompts —
+        // which reaches the user as empty columns in the exported workbook,
+        // not as an error. This is the upgrade an existing install makes.
+        let conn = test_conn();
+
+        for (_, json) in BUILTIN_AGENTS {
+            let export: AgentExport = serde_json::from_str(json).unwrap();
+            let agent = export.agent;
+            conn.execute(
+                "INSERT INTO agents (name, icon, system_prompt, default_task, model) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    agent.name,
+                    agent.icon,
+                    "a version 1 prompt",
+                    agent.default_task,
+                    agent.model
+                ],
+            )
+            .unwrap();
+        }
+        // v1 recorded only this, and no fingerprints
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, '1')",
+            params![BUILTIN_AGENTS_SEEDED_KEY],
+        )
+        .unwrap();
+
+        seed_builtin_agents(&conn).unwrap();
+
+        assert_ne!(
+            tester_prompt(&conn),
+            "a version 1 prompt",
+            "a v1 install must pick up the current bundled prompt"
+        );
+        // And it is now tracked, so the next version can reason about it
+        // properly rather than falling back to this migration allowance.
+        let recorded: Option<String> = conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = ?1",
+                params![format!("{}Tester", BUILTIN_AGENT_FINGERPRINT_PREFIX)],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap();
+        assert!(recorded.is_some(), "the update should record a fingerprint");
     }
 
     #[test]
