@@ -394,7 +394,10 @@ const BUILTIN_AGENTS_SEEDED_KEY: &str = "builtin_agents_seeded_version";
 ///       missing fingerprint as a user edit, which would have stranded every
 ///       v1 install on v1's prompts
 ///   3 — same agents as 2, with that migration fixed
-const BUILTIN_AGENTS_VERSION: u32 = 3;
+///   4 — Tester became read-only QA: it reports defects and never edits the
+///       repository, and gained the manual-testing pass (validation, flows,
+///       data lifecycle, roles, exploratory charters)
+const BUILTIN_AGENTS_VERSION: u32 = 4;
 
 /// Prefix for the per-agent fingerprint of what we last wrote
 const BUILTIN_AGENT_FINGERPRINT_PREFIX: &str = "builtin_agent_fingerprint:";

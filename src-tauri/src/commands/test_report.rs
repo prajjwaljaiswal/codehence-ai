@@ -464,7 +464,8 @@ pub struct ReportCounts {
     pub blocked: usize,
     pub skipped: usize,
     pub not_run: usize,
-    /// Cases whose category reads as an edge, boundary or negative case.
+    /// Cases whose category reads as an edge, boundary, negative or
+    /// validation case.
     pub edge_cases: usize,
     /// Cases and matrix rows that name a mobile platform or device.
     pub mobile_cases: usize,
@@ -476,7 +477,16 @@ pub struct ReportCounts {
 
 fn is_edge_category(category: &str) -> bool {
     let c = category.to_ascii_lowercase();
-    ["edge", "boundary", "negative", "error", "security", "stress", "concurrency"]
+    [
+        "edge",
+        "boundary",
+        "negative",
+        "error",
+        "validation",
+        "security",
+        "stress",
+        "concurrency",
+    ]
         .iter()
         .any(|k| c.contains(k))
 }
@@ -1478,6 +1488,19 @@ mod tests {
             .problems()
             .iter()
             .any(|p| p.contains("Nothing mobile was checked")));
+    }
+
+    #[test]
+    fn validation_cases_are_not_read_as_happy_paths() {
+        let report = report_from(
+            r#"{ "feature": "F",
+                 "cases": [{ "id": "TC-1", "category": "Validation", "platform": "Android", "expected": "x", "status": "pass" }] }"#,
+        );
+        assert_eq!(report.counts().edge_cases, 1);
+        assert!(!report
+            .problems()
+            .iter()
+            .any(|p| p.contains("only happy paths")));
     }
 
     #[test]
