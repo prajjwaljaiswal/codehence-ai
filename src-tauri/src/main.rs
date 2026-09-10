@@ -336,6 +336,10 @@ fn main() {
             commands::tickets::save_ticket_template,
             commands::tickets::preview_ticket_import,
             commands::tickets::import_tickets,
+            // Test documentation export
+            commands::test_report::test_report_status,
+            commands::test_report::export_test_report,
+            commands::test_report::save_test_report_template,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

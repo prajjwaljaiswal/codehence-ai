@@ -8,6 +8,7 @@ pub mod proxy;
 pub mod skills;
 pub mod slash_commands;
 pub mod storage;
+pub mod test_report;
 pub mod tickets;
 pub mod usage;
 pub mod workflow;

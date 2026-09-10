@@ -34,6 +34,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { HooksEditor } from "./HooksEditor";
 import { useTrackEvent, useComponentMetrics, useFeatureAdoptionTracking } from "@/hooks";
 import { useTabState } from "@/hooks/useTabState";
+import { TestReportExport } from "./TestReportExport";
 
 interface AgentExecutionProps {
   /**
@@ -558,6 +559,14 @@ export const AgentExecution: React.FC<AgentExecutionProps> = ({
               </div>
             </div>
             <div className="flex items-center gap-2">
+              {projectPath && (
+                <TestReportExport
+                  projectPath={projectPath}
+                  // A run that has just finished is the usual reason a report
+                  // appears where there was none, so look again when it does.
+                  refreshToken={isRunning}
+                />
+              )}
               {messages.length > 0 && (
                 <Button
                   variant="outline"

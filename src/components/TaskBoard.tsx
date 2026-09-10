@@ -38,6 +38,7 @@ import { listen } from "@/lib/events";
 import type { WorkflowEvent } from "@/lib/api";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { ImportTicketsDialog } from "./ImportTicketsDialog";
+import { TestReportExport } from "./TestReportExport";
 import { AgentQuestionDialog } from "./AgentQuestionDialog";
 import { RunPreviewPanel } from "./RunPreviewPanel";
 
@@ -699,6 +700,15 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
             <Upload className="h-4 w-4" />
             Import
           </Button>
+          <TestReportExport
+            projectPath={projectPath}
+            size="sm"
+            // A Tester run finishing is what makes a report appear, and that
+            // shows up here as the tickets reloading. The array's identity
+            // changes on every load, so a status change counts too - a count
+            // would not.
+            refreshToken={tickets}
+          />
           <Button
             size="sm"
             disabled={!board}

@@ -1,8 +1,9 @@
+use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket};
-use axum::http::Method;
+use axum::http::{header, Method, StatusCode};
 use axum::{
-    extract::{Path, State as AxumState, WebSocketUpgrade},
-    response::{Html, Json, Response},
+    extract::{Path, Query, State as AxumState, WebSocketUpgrade},
+    response::{Html, IntoResponse, Json, Response},
     routing::get,
     Router,
 };
@@ -247,6 +248,56 @@ async fn get_claude_session_output(Path(sessionId): Path<String>) -> Json<ApiRes
     Json(ApiResponse::success(
         "Output available via WebSocket only".to_string(),
     ))
+}
+
+/// Which project's test documentation an endpoint is being asked about.
+#[derive(Deserialize)]
+pub struct ProjectQuery {
+    /// The adapter that turns Tauri commands into these URLs passes its
+    /// arguments through unchanged, so the camelCase name arrives too.
+    #[serde(alias = "projectPath")]
+    pub project_path: String,
+}
+
+/// Report on the test documentation in a project, for the phone UI to decide
+/// whether to offer the download.
+async fn test_report_status_web(
+    Query(query): Query<ProjectQuery>,
+) -> Json<ApiResponse<commands::test_report::TestReportStatus>> {
+    match commands::test_report::test_report_status(query.project_path).await {
+        Ok(status) => Json(ApiResponse::success(status)),
+        Err(e) => Json(ApiResponse::error(e)),
+    }
+}
+
+/// Hand the workbook straight to the browser.
+///
+/// The desktop shell writes the file through a native save dialog, which a
+/// phone does not have: there, the only way to get the document off the machine
+/// running opcode is for the server to send the bytes and let the browser save
+/// them. Same workbook, built by the same code - only the delivery differs.
+async fn download_test_report(Query(query): Query<ProjectQuery>) -> Response {
+    match commands::test_report::export_test_report_bytes(&query.project_path) {
+        Ok((file_name, bytes)) => (
+            StatusCode::OK,
+            [
+                (
+                    header::CONTENT_TYPE,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        .to_string(),
+                ),
+                (
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{}\"", file_name),
+                ),
+            ],
+            Body::from(bytes),
+        )
+            .into_response(),
+        // A plain-text body rather than JSON: this URL is opened directly by the
+        // browser, so whatever comes back is what the person reads.
+        Err(e) => (StatusCode::NOT_FOUND, e).into_response(),
+    }
 }
 
 /// WebSocket handler for Claude execution with streaming output
@@ -820,6 +871,9 @@ pub async fn create_web_server(port: u16) -> Result<(), Box<dyn std::error::Erro
             "/api/sessions/{sessionId}/output",
             get(get_claude_session_output),
         )
+        // Test documentation
+        .route("/api/test-report", get(test_report_status_web))
+        .route("/api/test-report/download", get(download_test_report))
         // WebSocket endpoint for real-time Claude execution
         .route("/ws/claude", get(claude_websocket))
         // Serve static assets

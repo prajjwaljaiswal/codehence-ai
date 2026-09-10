@@ -597,6 +597,48 @@ export interface ImportResult {
   skipped: ImportRow[];
 }
 
+/** How a test pass came out, tallied for the summary sheet and the UI. */
+export interface TestReportCounts {
+  total: number;
+  passed: number;
+  failed: number;
+  blocked: number;
+  skipped: number;
+  not_run: number;
+  /** Cases whose category reads as an edge, boundary or negative case. */
+  edge_cases: number;
+  /** Cases and device-matrix rows that name a mobile platform. */
+  mobile_cases: number;
+  defects: number;
+  open_defects: number;
+  /** Passed over everything that actually ran, as a fraction. */
+  pass_rate: number;
+}
+
+/** The test documentation a Tester run left in a project, if any. */
+export interface TestReportStatus {
+  found: boolean;
+  /** The file that was read, when one was. */
+  path: string | null;
+  /** Where the Tester agent is told to write it. */
+  expected_path: string;
+  feature: string;
+  generated_at: string;
+  counts: TestReportCounts;
+  /** What is wrong with the report — shown before it is exported. */
+  problems: string[];
+  /** Set when a file is there but could not be parsed at all. */
+  error: string | null;
+}
+
+/** What an export actually produced. */
+export interface ExportedTestReport {
+  file_path: string;
+  sheets: string[];
+  counts: TestReportCounts;
+  problems: string[];
+}
+
 /** Per-column counts for the board header. */
 export interface BoardSummary {
   pending: number;
@@ -857,6 +899,35 @@ export const api = {
     filePath: string;
   }): Promise<ImportResult> {
     return await apiCall<ImportResult>("import_tickets", input);
+  },
+
+  /**
+   * Reports on the test documentation a Tester run left in a project, without
+   * exporting anything. `found: false` means no run has written one yet.
+   */
+  async testReportStatus(projectPath: string): Promise<TestReportStatus> {
+    return await apiCall<TestReportStatus>("test_report_status", { projectPath });
+  },
+
+  /**
+   * Turns a project's test report into an Excel workbook at `filePath`.
+   *
+   * Desktop only — a phone browser has no filesystem to write to, so there the
+   * workbook is fetched from the web server instead. See `testReportDownloadUrl`.
+   */
+  async exportTestReport(input: {
+    projectPath: string;
+    filePath: string;
+  }): Promise<ExportedTestReport> {
+    return await apiCall<ExportedTestReport>("export_test_report", input);
+  },
+
+  /**
+   * Writes the example report, so the schema is something you can open rather
+   * than something you learn by having a run get it wrong.
+   */
+  async saveTestReportTemplate(filePath: string): Promise<void> {
+    return await apiCall<void>("save_test_report_template", { filePath });
   },
 
   /**
