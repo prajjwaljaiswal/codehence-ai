@@ -24,7 +24,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { api, type Agent } from "@/lib/api";
+import { api, errorMessage, type Agent } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { StreamMessage } from "./StreamMessage";
@@ -398,7 +398,7 @@ export const AgentExecution: React.FC<AgentExecutionProps> = ({
         type: "result",
         subtype: "error",
         is_error: true,
-        result: `Failed to execute agent: ${err instanceof Error ? err.message : 'Unknown error'}`,
+        result: `Failed to execute agent: ${errorMessage(err)}`,
         duration_ms: 0,
         usage: {
           input_tokens: 0,

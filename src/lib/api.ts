@@ -1,6 +1,33 @@
 import { apiCall } from './apiAdapter';
 import type { HooksConfiguration } from '@/types/hooks';
 
+/**
+ * The text of a failure, whatever shape it arrived in.
+ *
+ * A Tauri command returning `Result<_, String>` rejects with the **string**
+ * itself, not an `Error`. Testing `instanceof Error` therefore discards every
+ * message the backend sends and leaves "Unknown error" in its place — which is
+ * what a Windows user saw instead of "Claude Code not found" or the real spawn
+ * failure. Read the value rather than assuming its type.
+ */
+export function errorMessage(error: unknown): string {
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object") {
+    // Tauri wraps some failures as { message } or { error }.
+    const bag = error as { message?: unknown; error?: unknown };
+    if (typeof bag.message === "string") return bag.message;
+    if (typeof bag.error === "string") return bag.error;
+    try {
+      return JSON.stringify(error);
+    } catch {
+      // Fall through to the last resort below.
+    }
+  }
+  return String(error ?? "Unknown error");
+}
+
+
 /** Process type for tracking in ProcessRegistry */
 export type ProcessType = 
   | { AgentRun: { agent_id: number; agent_name: string } }
@@ -1451,8 +1478,9 @@ export const api = {
       return await apiCall<number>('execute_agent', { agentId, projectPath, task, model });
     } catch (error) {
       console.error("Failed to execute agent:", error);
-      // Return a sentinel value to indicate error
-      throw new Error(`Failed to execute agent: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // Rethrown without a prefix: the caller adds its own, and two layers of
+      // "Failed to execute agent:" pushed the actual reason off the screen.
+      throw new Error(errorMessage(error));
     }
   },
 
@@ -1496,7 +1524,7 @@ export const api = {
       return await apiCall<AgentRunWithMetrics>('get_agent_run', { id });
     } catch (error) {
       console.error("Failed to get agent run:", error);
-      throw new Error(`Failed to get agent run: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Failed to get agent run: ${errorMessage(error)}`);
     }
   },
 
@@ -1510,7 +1538,7 @@ export const api = {
       return await apiCall<AgentRunWithMetrics>('get_agent_run_with_real_time_metrics', { id });
     } catch (error) {
       console.error("Failed to get agent run with real-time metrics:", error);
-      throw new Error(`Failed to get agent run with real-time metrics: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Failed to get agent run with real-time metrics: ${errorMessage(error)}`);
     }
   },
 
@@ -1523,7 +1551,7 @@ export const api = {
       return await apiCall<AgentRun[]>('list_running_sessions');
     } catch (error) {
       console.error("Failed to list running agent sessions:", error);
-      throw new Error(`Failed to list running agent sessions: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Failed to list running agent sessions: ${errorMessage(error)}`);
     }
   },
 
@@ -1537,7 +1565,7 @@ export const api = {
       return await apiCall<boolean>('kill_agent_session', { runId });
     } catch (error) {
       console.error("Failed to kill agent session:", error);
-      throw new Error(`Failed to kill agent session: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Failed to kill agent session: ${errorMessage(error)}`);
     }
   },
 
@@ -1551,7 +1579,7 @@ export const api = {
       return await apiCall<string | null>('get_session_status', { runId });
     } catch (error) {
       console.error("Failed to get session status:", error);
-      throw new Error(`Failed to get session status: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Failed to get session status: ${errorMessage(error)}`);
     }
   },
 
@@ -1564,7 +1592,7 @@ export const api = {
       return await apiCall<number[]>('cleanup_finished_processes');
     } catch (error) {
       console.error("Failed to cleanup finished processes:", error);
-      throw new Error(`Failed to cleanup finished processes: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Failed to cleanup finished processes: ${errorMessage(error)}`);
     }
   },
 
@@ -1578,7 +1606,7 @@ export const api = {
       return await apiCall<string>('get_session_output', { runId });
     } catch (error) {
       console.error("Failed to get session output:", error);
-      throw new Error(`Failed to get session output: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Failed to get session output: ${errorMessage(error)}`);
     }
   },
 
@@ -1592,7 +1620,7 @@ export const api = {
       return await apiCall<string>('get_live_session_output', { runId });
     } catch (error) {
       console.error("Failed to get live session output:", error);
-      throw new Error(`Failed to get live session output: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Failed to get live session output: ${errorMessage(error)}`);
     }
   },
 
@@ -1606,7 +1634,7 @@ export const api = {
       return await apiCall<void>('stream_session_output', { runId });
     } catch (error) {
       console.error("Failed to start streaming session output:", error);
-      throw new Error(`Failed to start streaming session output: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Failed to start streaming session output: ${errorMessage(error)}`);
     }
   },
 
