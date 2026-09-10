@@ -30,7 +30,38 @@ interface TabPanelProps {
 }
 
 const TabPanel: React.FC<TabPanelProps> = ({ tab, isActive }) => {
-  const { updateTab, createTasksTab } = useTabState();
+  const { updateTab, createTasksTab, notifyTabResponseReady } = useTabState();
+  // Remembers whether this tab's session was mid-response, so the
+  // streaming → idle transition (i.e. "the response just landed") can be
+  // told apart from the many other times this fires, mount included.
+  const lastWrittenStatusRef = React.useRef<Tab['status'] | null>(null);
+
+  /**
+   * Mirrors a chat session's streaming state onto the tab, which drives the
+   * spinner in the tab bar.
+   *
+   * Must be a stable callback: ClaudeCodeSession lists this in a useEffect's
+   * dependencies, so a fresh closure each render would re-fire that effect,
+   * and the updateTab below would then feed a render → effect → update loop.
+   */
+  const handleStreamingChange = React.useCallback((isStreaming: boolean) => {
+    // Only write when it actually changes — updateTab always produces a new
+    // tab object, so redundant writes churn state for every consumer.
+    const nextStatus: Tab['status'] = isStreaming ? 'running' : 'idle';
+    if (lastWrittenStatusRef.current !== nextStatus) {
+      lastWrittenStatusRef.current = nextStatus;
+      updateTab(tab.id, { status: nextStatus });
+    }
+  }, [tab.id, updateTab]);
+
+  /**
+   * A turn actually finished — flag the tab unread and notify, unless the
+   * user is already looking at it. Driven by the session's completion event
+   * rather than its loading flag, which also toggles for history loads.
+   */
+  const handleResponseComplete = React.useCallback(() => {
+    notifyTabResponseReady(tab.id);
+  }, [tab.id, notifyTabResponseReady]);
   const [projects, setProjects] = React.useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = React.useState<Project | null>(null);
   const [sessions, setSessions] = React.useState<Session[]>([]);
@@ -281,6 +312,8 @@ const TabPanel: React.FC<TabPanelProps> = ({ tab, isActive }) => {
                   title: dirName
                 });
               }}
+              onStreamingChange={handleStreamingChange}
+              onResponseComplete={handleResponseComplete}
             />
           </div>
         );

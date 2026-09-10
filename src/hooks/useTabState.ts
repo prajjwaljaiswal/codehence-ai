@@ -39,6 +39,8 @@ interface UseTabStateReturn {
   findTabByAgentRunId: (agentRunId: string) => Tab | undefined;
   findTabByType: (type: Tab['type']) => Tab | undefined;
   canAddTab: () => boolean;
+  notifyTabResponseReady: (id: string) => void;
+  unreadResponseCount: number;
 }
 
 export const useTabState = (): UseTabStateReturn => {
@@ -50,7 +52,9 @@ export const useTabState = (): UseTabStateReturn => {
     updateTab,
     setActiveTab,
     getTabById,
-    getTabsByType
+    getTabsByType,
+    notifyTabResponseReady,
+    unreadResponseCount
   } = useTabContext();
 
   const activeTab = useMemo(() => 
@@ -380,6 +384,8 @@ export const useTabState = (): UseTabStateReturn => {
     findTabBySessionId,
     findTabByAgentRunId,
     findTabByType,
-    canAddTab
+    canAddTab,
+    notifyTabResponseReady,
+    unreadResponseCount
   };
 };

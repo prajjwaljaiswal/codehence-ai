@@ -12,7 +12,12 @@ import {
   Lightbulb,
   Cpu,
   Rocket,
-  
+  Paperclip,
+  FileText,
+  FileType,
+  AlertTriangle,
+  X,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -22,7 +27,8 @@ import { TooltipProvider, TooltipSimple, Tooltip, TooltipTrigger, TooltipContent
 import { FilePicker } from "./FilePicker";
 import { SlashCommandPicker } from "./SlashCommandPicker";
 import { ImagePreview } from "./ImagePreview";
-import { type FileEntry, type SlashCommand } from "@/lib/api";
+import { api, type Attachment, type FileEntry, type SlashCommand } from "@/lib/api";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 
 import { getCurrentWebviewWindow as tauriGetCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { isTauri } from "@/lib/apiAdapter";
@@ -234,6 +240,13 @@ const FloatingPromptInputInner = (
   const [cursorPosition, setCursorPosition] = useState(0);
   const [embeddedImages, setEmbeddedImages] = useState<string[]>([]);
   const [dragActive, setDragActive] = useState(false);
+  // Files attached via the paperclip button or drag-and-drop. Each one is
+  // referenced in the prompt as an @mention of a path Claude can read, so the
+  // prompt text stays the source of truth; this list only drives the chips UI
+  // and is pruned when a mention is deleted by hand.
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attaching, setAttaching] = useState(false);
+  const [attachError, setAttachError] = useState<string | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const expandedTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -338,12 +351,131 @@ const FloatingPromptInputInner = (
     return uniquePaths;
   };
 
+  // Wrap a path in an @mention, quoting it when it contains spaces
+  const pathToMention = (path: string) => (path.includes(' ') ? `@"${path}"` : `@${path}`);
+
+  const formatAttachmentSize = (bytes: number): string => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  /**
+   * Resolve picked/dropped files into paths Claude can read and mention them
+   * in the prompt. Formats that can't be read (e.g. .xlsx) surface an error
+   * rather than being silently ignored.
+   */
+  const attachFiles = async (paths: string[]) => {
+    if (paths.length === 0) return;
+
+    setAttaching(true);
+    setAttachError(null);
+
+    try {
+      const prepared: Attachment[] = [];
+      const failures: string[] = [];
+
+      for (const path of paths) {
+        try {
+          const attachment = await api.prepareAttachment(path);
+          if (attachment.kind === 'unsupported') {
+            failures.push(attachment.note || `${attachment.file_name} can't be read`);
+            continue;
+          }
+          prepared.push(attachment);
+        } catch (err) {
+          failures.push(err instanceof Error ? err.message : String(err));
+        }
+      }
+
+      if (failures.length > 0) {
+        setAttachError(failures.join('  •  '));
+      }
+      if (prepared.length === 0) return;
+
+      setAttachments(prev => {
+        const existing = new Set(prev.map(a => a.read_path));
+        return [...prev, ...prepared.filter(a => !existing.has(a.read_path))];
+      });
+
+      setPrompt(currentPrompt => {
+        const newMentions = prepared
+          .filter(a => !currentPrompt.includes(a.read_path))
+          .map(a => pathToMention(a.read_path));
+
+        if (newMentions.length === 0) return currentPrompt;
+
+        const separator = currentPrompt === '' || currentPrompt.endsWith(' ') ? '' : ' ';
+        const newPrompt = `${currentPrompt}${separator}${newMentions.join(' ')} `;
+
+        setTimeout(() => {
+          const target = isExpanded ? expandedTextareaRef.current : textareaRef.current;
+          target?.focus();
+          target?.setSelectionRange(newPrompt.length, newPrompt.length);
+        }, 0);
+
+        return newPrompt;
+      });
+    } finally {
+      setAttaching(false);
+    }
+  };
+
+  // The drag-drop listener is registered once on mount, so it reaches the
+  // current attachFiles through a ref instead of a stale closure.
+  const attachFilesRef = useRef(attachFiles);
+  attachFilesRef.current = attachFiles;
+
+  const handleAttachClick = async () => {
+    try {
+      const selected = await openFileDialog({
+        multiple: true,
+        title: 'Attach files',
+        filters: [
+          {
+            name: 'Documents & images',
+            extensions: [
+              'pdf', 'doc', 'docx', 'rtf', 'odt',
+              'txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'yaml', 'yml', 'xml', 'html', 'log',
+              'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'
+            ]
+          },
+          { name: 'All files', extensions: ['*'] }
+        ]
+      });
+
+      if (!selected) return;
+      await attachFiles(Array.isArray(selected) ? selected : [selected]);
+    } catch (err) {
+      console.error('Failed to attach files:', err);
+      setAttachError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const removeAttachment = (attachment: Attachment) => {
+    setAttachments(prev => prev.filter(a => a.read_path !== attachment.read_path));
+    setPrompt(currentPrompt =>
+      currentPrompt
+        .replace(`@"${attachment.read_path}"`, '')
+        .replace(`@${attachment.read_path}`, '')
+        .replace(/[ \t]{2,}/g, ' ')
+        .trimStart()
+    );
+  };
+
   // Update embedded images when prompt changes
   useEffect(() => {
     console.log('[useEffect] Prompt changed:', prompt);
     const imagePaths = extractImagePaths(prompt);
     console.log('[useEffect] Setting embeddedImages to:', imagePaths);
     setEmbeddedImages(imagePaths);
+
+    // Drop attachment chips whose @mention the user deleted by hand, and
+    // clear them all when the prompt is emptied (e.g. after sending).
+    setAttachments(prev => {
+      const stillMentioned = prev.filter(a => prompt.includes(a.read_path));
+      return stillMentioned.length === prev.length ? prev : stillMentioned;
+    });
     
     // Auto-resize on prompt change (handles paste, programmatic changes, etc.)
     if (textareaRef.current && !isExpanded) {
@@ -385,36 +517,11 @@ const FloatingPromptInputInner = (
             lastDropTime = currentTime;
 
             const droppedPaths = event.payload.paths as string[];
-            const imagePaths = droppedPaths.filter(isImageFile);
 
-            if (imagePaths.length > 0) {
-              setPrompt(currentPrompt => {
-                const existingPaths = extractImagePaths(currentPrompt);
-                const newPaths = imagePaths.filter(p => !existingPaths.includes(p));
-
-                if (newPaths.length === 0) {
-                  return currentPrompt; // All dropped images are already in the prompt
-                }
-
-                // Wrap paths with spaces in quotes for clarity
-                const mentionsToAdd = newPaths.map(p => {
-                  // If path contains spaces, wrap in quotes
-                  if (p.includes(' ')) {
-                    return `@"${p}"`;
-                  }
-                  return `@${p}`;
-                }).join(' ');
-                const newPrompt = currentPrompt + (currentPrompt.endsWith(' ') || currentPrompt === '' ? '' : ' ') + mentionsToAdd + ' ';
-
-                setTimeout(() => {
-                  const target = isExpanded ? expandedTextareaRef.current : textareaRef.current;
-                  target?.focus();
-                  target?.setSelectionRange(newPrompt.length, newPrompt.length);
-                }, 0);
-
-                return newPrompt;
-              });
-            }
+            // Every dropped file goes through the same attachment pipeline —
+            // documents and PDFs included, not just images (which is all this
+            // previously accepted, silently ignoring everything else).
+            void attachFilesRef.current(droppedPaths);
           }
         });
       } catch (error) {
@@ -706,6 +813,8 @@ const FloatingPromptInputInner = (
       onSend(finalPrompt, selectedModel);
       setPrompt("");
       setEmbeddedImages([]);
+      setAttachments([]);
+      setAttachError(null);
       setTextareaHeight(48); // Reset height after sending
     }
   };
@@ -843,6 +952,10 @@ const FloatingPromptInputInner = (
 
   const selectedModelData = MODELS.find(m => m.id === selectedModel) || MODELS[0];
 
+  // Images already render as thumbnails via ImagePreview, so the chips only
+  // cover documents (PDFs, text files, converted Word docs).
+  const documentAttachments = attachments.filter(a => a.kind !== 'image');
+
   return (
     <TooltipProvider>
     <>
@@ -890,6 +1003,40 @@ const FloatingPromptInputInner = (
                   onRemove={handleRemoveImage}
                   className="border-t border-border pt-2"
                 />
+              )}
+
+              {/* Attached documents in expanded mode */}
+              {documentAttachments.length > 0 && (
+                <div className="flex flex-wrap gap-2 border-t border-border pt-2">
+                  {documentAttachments.map((attachment) => {
+                    const Icon = attachment.kind === 'pdf' ? FileType : FileText;
+                    return (
+                      <div
+                        key={attachment.read_path}
+                        className="flex items-center gap-2 pl-2 pr-1 py-1 rounded-md bg-muted/60 border max-w-[280px]"
+                      >
+                        <Icon className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                        <div className="min-w-0">
+                          <p className="text-xs truncate" title={attachment.original_path}>
+                            {attachment.file_name}
+                          </p>
+                          <p className="text-[10px] text-muted-foreground">
+                            {formatAttachmentSize(attachment.size_bytes)}
+                            {attachment.kind === 'converted' && ' · converted to text'}
+                          </p>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => removeAttachment(attachment)}
+                          className="h-5 w-5 flex-shrink-0"
+                        >
+                          <X className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
 
               <Textarea
@@ -1075,6 +1222,56 @@ const FloatingPromptInputInner = (
             />
           )}
 
+          {/* Attached documents (images already show as thumbnails above) */}
+          {documentAttachments.length > 0 && (
+            <div className="flex flex-wrap gap-2 px-3 py-2 border-b border-border">
+              {documentAttachments.map((attachment) => {
+                const Icon = attachment.kind === 'pdf' ? FileType : FileText;
+                return (
+                  <div
+                    key={attachment.read_path}
+                    className="flex items-center gap-2 pl-2 pr-1 py-1 rounded-md bg-muted/60 border max-w-[280px]"
+                  >
+                    <Icon className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-xs truncate" title={attachment.original_path}>
+                        {attachment.file_name}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {formatAttachmentSize(attachment.size_bytes)}
+                        {attachment.kind === 'converted' && ' · converted to text'}
+                      </p>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => removeAttachment(attachment)}
+                      className="h-5 w-5 flex-shrink-0"
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Attachment problems (e.g. a format that can't be read) */}
+          {attachError && (
+            <div className="flex items-start gap-2 px-3 py-2 border-b border-border text-amber-500">
+              <AlertTriangle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
+              <p className="text-xs flex-1">{attachError}</p>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setAttachError(null)}
+                className="h-5 w-5 flex-shrink-0"
+              >
+                <X className="h-3 w-3" />
+              </Button>
+            </div>
+          )}
+
           <div className="p-3">
             <div className="flex items-end gap-2">
               {/* Model & Thinking Mode Selectors - Left side, fixed at bottom */}
@@ -1243,6 +1440,27 @@ const FloatingPromptInputInner = (
 
                 {/* Action buttons inside input - fixed at bottom right */}
                 <div className="absolute right-1.5 bottom-1.5 flex items-center gap-0.5">
+                  <TooltipSimple content="Attach a document, PDF or image" side="top">
+                    <motion.div
+                      whileTap={{ scale: 0.97 }}
+                      transition={{ duration: 0.15 }}
+                    >
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={handleAttachClick}
+                        disabled={disabled || attaching}
+                        className="h-8 w-8 hover:bg-accent/50 transition-colors"
+                      >
+                        {attaching ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Paperclip className="h-3.5 w-3.5" />
+                        )}
+                      </Button>
+                    </motion.div>
+                  </TooltipSimple>
+
                   <TooltipSimple content="Expand (Ctrl+Shift+E)" side="top">
                     <motion.div
                       whileTap={{ scale: 0.97 }}

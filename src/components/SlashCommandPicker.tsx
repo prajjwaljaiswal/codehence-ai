@@ -14,11 +14,36 @@ import {
   Terminal,
   AlertCircle,
   User,
-  Building2
+  Building2,
+  Sparkles
 } from "lucide-react";
-import type { SlashCommand } from "@/lib/api";
+import type { Skill, SlashCommand } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useTrackEvent, useFeatureAdoptionTracking } from "@/hooks";
+
+/** Scopes we use for skills mapped into the command list */
+const SKILL_SCOPES = ["user-skill", "project-skill"] as const;
+const isSkillScope = (scope: string) => (SKILL_SCOPES as readonly string[]).includes(scope);
+
+/**
+ * Skills are invoked exactly like slash commands (`/<name>`), so they're
+ * mapped into the same shape the picker already renders and inserts — with a
+ * distinct scope so they can be grouped and iconed as skills.
+ */
+const skillToCommand = (skill: Skill): SlashCommand => ({
+  id: skill.id,
+  name: skill.name,
+  full_command: `/${skill.name}`,
+  scope: skill.scope === "project" ? "project-skill" : "user-skill",
+  namespace: undefined,
+  file_path: skill.file_path,
+  content: skill.content,
+  description: skill.description,
+  allowed_tools: skill.allowed_tools,
+  has_bash_commands: false,
+  has_file_references: false,
+  accepts_arguments: false,
+});
 
 interface SlashCommandPickerProps {
   /**
@@ -45,6 +70,9 @@ interface SlashCommandPickerProps {
 
 // Get icon for command based on its properties
 const getCommandIcon = (command: SlashCommand) => {
+  // Skills get their own icon regardless of scope
+  if (isSkillScope(command.scope)) return Sparkles;
+
   // If it has bash commands, show terminal icon
   if (command.has_bash_commands) return Terminal;
   
@@ -215,10 +243,19 @@ export const SlashCommandPicker: React.FC<SlashCommandPickerProps> = ({
     try {
       setIsLoading(true);
       setError(null);
-      
-      // Always load fresh commands from filesystem
-      const loadedCommands = await api.slashCommandsList(projectPath);
-      setCommands(loadedCommands);
+
+      // Always load fresh commands and skills from the filesystem. Skills
+      // are folded into the same list because they're invoked identically
+      // (`/<name>`); a failure to load them shouldn't hide the commands.
+      const [loadedCommands, loadedSkills] = await Promise.all([
+        api.slashCommandsList(projectPath),
+        api.skillsList(projectPath).catch((err) => {
+          console.error("Failed to load skills:", err);
+          return [] as Skill[];
+        }),
+      ]);
+
+      setCommands([...loadedCommands, ...loadedSkills.map(skillToCommand)]);
     } catch (err) {
       console.error("Failed to load slash commands:", err);
       setError(err instanceof Error ? err.message : 'Failed to load commands');
@@ -240,7 +277,11 @@ export const SlashCommandPicker: React.FC<SlashCommandPickerProps> = ({
   // Group commands by scope and namespace for the Custom tab
   const groupedCommands = filteredCommands.reduce((acc, cmd) => {
     let key: string;
-    if (cmd.scope === "user") {
+    if (cmd.scope === "user-skill") {
+      key = "User Skills";
+    } else if (cmd.scope === "project-skill") {
+      key = "Project Skills";
+    } else if (cmd.scope === "user") {
       key = cmd.namespace ? `User Commands: ${cmd.namespace}` : "User Commands";
     } else if (cmd.scope === "project") {
       key = cmd.namespace ? `Project Commands: ${cmd.namespace}` : "Project Commands";
@@ -278,7 +319,7 @@ export const SlashCommandPicker: React.FC<SlashCommandPickerProps> = ({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Command className="h-4 w-4 text-muted-foreground" />
-            <span className="text-sm font-medium">Slash Commands</span>
+            <span className="text-sm font-medium">Commands &amp; Skills</span>
             {searchQuery && (
               <span className="text-xs text-muted-foreground">
                 Searching: "{searchQuery}"
@@ -392,11 +433,11 @@ export const SlashCommandPicker: React.FC<SlashCommandPickerProps> = ({
                   <div className="flex flex-col items-center justify-center h-full">
                     <Search className="h-8 w-8 text-muted-foreground mb-2" />
                     <span className="text-sm text-muted-foreground">
-                      {searchQuery ? 'No commands found' : 'No custom commands available'}
+                      {searchQuery ? 'No commands or skills found' : 'No custom commands or skills available'}
                     </span>
                     {!searchQuery && (
                       <p className="text-xs text-muted-foreground mt-2 text-center px-4">
-                        Create commands in <code className="px-1">.claude/commands/</code> or <code className="px-1">~/.claude/commands/</code>
+                        Create commands in <code className="px-1">.claude/commands/</code> or skills in <code className="px-1">.claude/skills/</code> (project), or the same paths under <code className="px-1">~/.claude/</code>
                       </p>
                     )}
                   </div>
@@ -476,6 +517,7 @@ export const SlashCommandPicker: React.FC<SlashCommandPickerProps> = ({
                             <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider px-3 mb-1 flex items-center gap-2">
                               {groupKey.startsWith("User Commands") && <User className="h-3 w-3" />}
                               {groupKey.startsWith("Project Commands") && <Building2 className="h-3 w-3" />}
+                              {groupKey.endsWith("Skills") && <Sparkles className="h-3 w-3" />}
                               {groupKey}
                             </h3>
                             

@@ -101,8 +101,16 @@ const TabItem: React.FC<TabItemProps> = ({ tab, isActive, onClose, onClick, isDr
           </span>
         )}
 
-        {tab.hasUnsavedChanges && !statusIcon && (
-          <span 
+        {/* A response landed while this tab was in the background */}
+        {tab.hasUnreadResponse && !statusIcon && (
+          <span
+            className="w-2 h-2 bg-primary rounded-full animate-pulse"
+            title="New response — not viewed yet"
+          />
+        )}
+
+        {tab.hasUnsavedChanges && !statusIcon && !tab.hasUnreadResponse && (
+          <span
             className="w-1.5 h-1.5 bg-primary rounded-full"
             title="Unsaved changes"
           />

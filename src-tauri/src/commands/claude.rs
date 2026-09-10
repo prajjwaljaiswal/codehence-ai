@@ -1170,6 +1170,19 @@ pub async fn get_claude_session_output(
     }
 }
 
+/// Reports the current size of a background-task output file, so the
+/// frontend can poll for the file no longer growing as a (heuristic) signal
+/// that the backgrounded shell command it belongs to has finished. Returns
+/// `None` if the file doesn't exist (yet).
+#[tauri::command]
+pub async fn get_background_task_file_size(path: String) -> Result<Option<u64>, String> {
+    match fs::metadata(&path) {
+        Ok(metadata) => Ok(Some(metadata.len())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("Failed to stat {}: {}", path, e)),
+    }
+}
+
 /// Helper function to spawn Claude process and handle streaming
 async fn spawn_claude_process(
     app: AppHandle,
@@ -1264,11 +1277,22 @@ async fn spawn_claude_process(
                 let _ = registry_clone.append_live_output(run_id, &line);
             }
 
-            // Emit the line to the frontend with session isolation if we have session ID
+            // Emit the line to the frontend with session isolation if we have session ID.
+            //
+            // NOTE: this intentionally emits on BOTH the scoped and the generic
+            // channel for the whole lifetime of the process (restored after a
+            // regression): cutting the generic channel off as soon as the
+            // session ID becomes known raced with the frontend's async
+            // `listen(...)` IPC call to register its scoped listener — any line
+            // emitted scoped-only in that small window before the scoped
+            // listener finished registering was silently lost, hanging the UI
+            // forever. Duplicate delivery is handled defensively on the
+            // frontend instead (see `seenStreamPayloadsRef` in
+            // ClaudeCodeSession.tsx), which is safe regardless of channel
+            // timing.
             if let Some(ref session_id) = *session_id_holder_clone.lock().unwrap() {
                 let _ = app_handle.emit(&format!("claude-output:{}", session_id), &line);
             }
-            // Also emit to the generic event for backward compatibility
             let _ = app_handle.emit("claude-output", &line);
         }
     });
@@ -1283,7 +1307,7 @@ async fn spawn_claude_process(
             if let Some(ref session_id) = *session_id_holder_clone2.lock().unwrap() {
                 let _ = app_handle_stderr.emit(&format!("claude-error:{}", session_id), &line);
             }
-            // Also emit to the generic event for backward compatibility
+            // Also emit to the generic event (see NOTE above on stdout)
             let _ = app_handle_stderr.emit("claude-error", &line);
         }
     });
@@ -1310,7 +1334,7 @@ async fn spawn_claude_process(
                         let _ = app_handle_wait
                             .emit(&format!("claude-complete:{}", session_id), status.success());
                     }
-                    // Also emit to the generic event for backward compatibility
+                    // Also emit to the generic event (see NOTE above on stdout)
                     let _ = app_handle_wait.emit("claude-complete", status.success());
                 }
                 Err(e) => {
@@ -1321,7 +1345,7 @@ async fn spawn_claude_process(
                         let _ =
                             app_handle_wait.emit(&format!("claude-complete:{}", session_id), false);
                     }
-                    // Also emit to the generic event for backward compatibility
+                    // Also emit to the generic event (see NOTE above on stdout)
                     let _ = app_handle_wait.emit("claude-complete", false);
                 }
             }
