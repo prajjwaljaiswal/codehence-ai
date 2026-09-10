@@ -91,7 +91,16 @@ export const AgentExecution: React.FC<AgentExecutionProps> = ({
 }) => {
   const [projectPath] = useState(initialProjectPath || "");
   const [task, setTask] = useState(agent.default_task || "");
-  const [model, setModel] = useState(agent.model || "sonnet");
+  // Every agent run uses sonnet. Not state and not read from the agent: the
+  // picker is hidden (below), so there is nothing to change it, and several
+  // bundled agents still say "opus" in their definition — honouring that
+  // would quietly put runs on the expensive model with no way to see or
+  // change it in the UI. Restore `useState(agent.model || "sonnet")` if the
+  // picker comes back.
+  const model = "sonnet";
+  // What the run is labelled as, in the header and in an exported transcript.
+  // One constant so the two never disagree about what actually ran.
+  const modelLabel = "Claude 4 Sonnet";
   const [isRunning, setIsRunning] = useState(false);
   
   // Get tab state functions
@@ -470,7 +479,7 @@ export const AgentExecution: React.FC<AgentExecutionProps> = ({
   const handleCopyAsMarkdown = async () => {
     let markdown = `# Agent Execution: ${agent.name}\n\n`;
     markdown += `**Task:** ${task}\n`;
-    markdown += `**Model:** ${model === 'opus' ? 'Claude 4 Opus' : 'Claude 4 Sonnet'}\n`;
+    markdown += `**Model:** ${modelLabel}\n`;
     markdown += `**Date:** ${new Date().toISOString()}\n\n`;
     markdown += `---\n\n`;
 
@@ -554,7 +563,7 @@ export const AgentExecution: React.FC<AgentExecutionProps> = ({
               <div>
                 <h1 className="text-heading-1">{agent.name}</h1>
                 <p className="mt-1 text-body-small text-muted-foreground">
-                  {isRunning ? 'Running' : messages.length > 0 ? 'Complete' : 'Ready'} • {model === 'opus' ? 'Claude 4 Opus' : 'Claude 4 Sonnet'}
+                  {isRunning ? 'Running' : messages.length > 0 ? 'Complete' : 'Ready'} • {modelLabel}
                 </p>
               </div>
             </div>
@@ -598,7 +607,11 @@ export const AgentExecution: React.FC<AgentExecutionProps> = ({
               </motion.div>
             )}
 
-            {/* Model Selection */}
+            {/* Model selection is hidden: agents run on the model their
+                definition specifies, which is sonnet unless the agent
+                itself says otherwise. Uncomment to let the user choose
+                per run again. */}
+            {/*
             <div className="space-y-3">
               <Label className="text-caption text-muted-foreground">Model Selection</Label>
               <div className="flex gap-2">
@@ -663,6 +676,7 @@ export const AgentExecution: React.FC<AgentExecutionProps> = ({
                 </motion.button>
               </div>
             </div>
+            */}
 
             {/* Task Input */}
             <div className="space-y-3">

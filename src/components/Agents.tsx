@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Bot, Loader2, Play, Clock, CheckCircle, XCircle, Trash2, Import, ChevronDown, ChevronRight, FileJson, Globe, Download, Plus, History, Edit } from 'lucide-react';
+// Plus is gone with the Create Agent buttons below; put it back alongside them.
+import { Bot, Loader2, Play, Clock, CheckCircle, XCircle, Trash2, Import, ChevronDown, ChevronRight, FileJson, Globe, Download, History, Edit } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -232,10 +233,13 @@ export const Agents: React.FC = () => {
                 </DropdownMenuContent>
               </DropdownMenu>
 
-              <Button onClick={() => setShowCreateAgent(true)}>
+              {/* Creating agents is hidden for now: the nine bundled agents
+                  are the offering, and each can still be edited in place.
+                  Restore this button to bring authoring back. */}
+              {/* <Button onClick={() => setShowCreateAgent(true)}>
                 <Plus className="w-4 h-4 mr-2" />
                 Create Agent
-              </Button>
+              </Button> */}
             </div>
           </div>
         </div>
@@ -332,13 +336,16 @@ export const Agents: React.FC = () => {
                 <div className="flex flex-col items-center justify-center h-64 text-center">
                   <Bot className="w-12 h-12 text-muted-foreground mb-4" />
                   <h3 className="text-lg font-semibold mb-2">No Agents Yet</h3>
+                  {/* With authoring hidden, an empty list means the bundled
+                      agents did not install — importing one is the way back,
+                      so this no longer offers to create one. */}
                   <p className="text-muted-foreground mb-4">
-                    Create your first agent to get started
+                    Import an agent to get started
                   </p>
-                  <Button onClick={() => setShowCreateAgent(true)}>
+                  {/* <Button onClick={() => setShowCreateAgent(true)}>
                     <Plus className="w-4 h-4 mr-2" />
                     Create Agent
-                  </Button>
+                  </Button> */}
                 </div>
               ) : (
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
