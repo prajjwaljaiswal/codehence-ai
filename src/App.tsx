@@ -26,6 +26,7 @@ import { TabContent } from "@/components/TabContent";
 import { useTabState } from "@/hooks/useTabState";
 import { useAppLifecycle, useTrackEvent } from "@/hooks";
 import { StartupIntro } from "@/components/StartupIntro";
+import { UpdateDialog } from "@/components/UpdateDialog";
 
 type View = 
   | "welcome" 
@@ -446,6 +447,8 @@ function AppContent() {
         </div>
       )}
       
+      <UpdateDialog />
+
       {/* Toast Container */}
       <ToastContainer>
         {toast && (

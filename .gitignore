@@ -37,3 +37,6 @@ CLAUDE.md
 .claude/
 
 .env
+
+# Tauri updater signing keypair (private key must never be committed)
+.tauri-keys/

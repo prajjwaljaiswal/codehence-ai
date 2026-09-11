@@ -4,6 +4,14 @@ name: Build installers
 # MSVC toolchain, the Windows SDK and WebView2), so the .exe is produced on a
 # Windows runner here. Run this workflow manually to get build artifacts, or
 # push a v* tag to also publish them to a GitHub Release.
+#
+# A v* tag push publishes the release immediately (not as a draft) and
+# generates latest.json, because the in-app auto-updater (src/hooks/useAppUpdater.ts)
+# polls https://github.com/<repo>/releases/latest/download/latest.json — an
+# unpublished draft release is invisible to that endpoint. Requires two repo
+# secrets to sign the update artifacts: TAURI_SIGNING_PRIVATE_KEY and
+# TAURI_SIGNING_PRIVATE_KEY_PASSWORD (see tauri.conf.json's plugins.updater.pubkey
+# for the matching public key).
 on:
   workflow_dispatch:
   push:
@@ -21,11 +29,15 @@ jobs:
             artifact_name: windows-installer
             artifact_path: |
               src-tauri/target/release/bundle/nsis/*-setup.exe
+              src-tauri/target/release/bundle/nsis/*-setup.exe.sig
               src-tauri/target/release/*.exe
           - platform: macos-latest
             build_script: build:dmg
             artifact_name: macos-dmg
-            artifact_path: src-tauri/target/release/bundle/dmg/*.dmg
+            artifact_path: |
+              src-tauri/target/release/bundle/dmg/*.dmg
+              src-tauri/target/release/bundle/macos/*.app.tar.gz
+              src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
 
     runs-on: ${{ matrix.platform }}
 
@@ -53,6 +65,9 @@ jobs:
       # `bun run build` (tsc + vite), so the frontend is built here too.
       - name: Build (${{ matrix.build_script }})
         run: bun run ${{ matrix.build_script }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -72,8 +87,47 @@ jobs:
         with:
           path: artifacts
 
+      # Builds the update manifest the in-app updater polls for. Written into
+      # artifacts/ so the gh-release step below uploads it alongside the
+      # installers with no extra `files:` entry needed.
+      - name: Generate latest.json (updater manifest)
+        run: |
+          set -euo pipefail
+
+          VERSION="${GITHUB_REF_NAME#v}"
+          PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          WIN_SIG_FILE=$(find artifacts/windows-installer -name '*-setup.exe.sig' | head -n1)
+          WIN_EXE_FILE="${WIN_SIG_FILE%.sig}"
+          WIN_SIGNATURE=$(cat "$WIN_SIG_FILE")
+          WIN_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/$(basename "$WIN_EXE_FILE")"
+
+          MAC_SIG_FILE=$(find artifacts/macos-dmg -name '*.app.tar.gz.sig' | head -n1)
+          MAC_ARCHIVE_FILE="${MAC_SIG_FILE%.sig}"
+          MAC_SIGNATURE=$(cat "$MAC_SIG_FILE")
+          MAC_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/$(basename "$MAC_ARCHIVE_FILE")"
+
+          # macos-latest runners are Apple Silicon; update this key (and add an
+          # x86_64 build) if an Intel runner is ever added to the matrix.
+          jq -n \
+            --arg version "$VERSION" \
+            --arg pub_date "$PUB_DATE" \
+            --arg win_sig "$WIN_SIGNATURE" \
+            --arg win_url "$WIN_URL" \
+            --arg mac_sig "$MAC_SIGNATURE" \
+            --arg mac_url "$MAC_URL" \
+            '{
+              version: $version,
+              notes: "See the GitHub Release notes for details.",
+              pub_date: $pub_date,
+              platforms: {
+                "windows-x86_64": { signature: $win_sig, url: $win_url },
+                "darwin-aarch64": { signature: $mac_sig, url: $mac_url }
+              }
+            }' | tee artifacts/latest.json
+
       - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**/*
-          draft: true
+          draft: false
           generate_release_notes: true

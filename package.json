@@ -10,7 +10,7 @@
     "prebuild": "",
     "preview": "vite preview",
     "tauri": "tauri",
-    "build:dmg": "tauri build --bundles dmg",
+    "build:dmg": "tauri build --bundles dmg,app",
     "build:exe": "tauri build --bundles nsis",
     "build:msi": "tauri build --bundles msi",
     "check": "tsc --noEmit && cd src-tauri && cargo check"
@@ -34,7 +34,9 @@
     "@tauri-apps/plugin-dialog": "^2.0.2",
     "@tauri-apps/plugin-global-shortcut": "^2.0.0",
     "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-shell": "^2.0.1",
+    "@tauri-apps/plugin-updater": "^2.11.0",
     "@types/diff": "^8.0.0",
     "@types/react-syntax-highlighter": "^15.5.13",
     "@uiw/react-md-editor": "^4.0.7",
