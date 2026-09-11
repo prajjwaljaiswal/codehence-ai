@@ -1,12 +1,12 @@
 # Welcome Contributors
 
-We welcome contributions to enhance opcode's capabilities and improve its performance. To report bugs, create a [GitHub issue](https://github.com/getAsterisk/opcode/issues).
+We welcome contributions to enhance dotsquares-ai's capabilities and improve its performance. To report bugs, create a [GitHub issue](https://github.com/getAsterisk/dotsquares-ai/issues).
 
 > Before contributing, read through the existing issues and pull requests to see if someone else is already working on something similar. That way you can avoid duplicating efforts.
 
 To contribute, please follow these steps:
 
-1. Fork the opcode repository on GitHub.
+1. Fork the dotsquares-ai repository on GitHub.
 2. Create a new branch for your feature or bug fix.
 3. Make your changes and ensure that the code passes all tests.
 4. Submit a pull request describing your changes and their benefits.
@@ -35,17 +35,19 @@ When submitting a pull request, please follow these guidelines:
 
 5. If the pull request does not meet the above guidelines, it may be closed without merging.
 
-**Note**: Please ensure that you have the latest version of the code before creating a pull request. If you have an existing fork, just sync your fork with the latest version of the opcode repository.
+**Note**: Please ensure that you have the latest version of the code before creating a pull request. If you have an existing fork, just sync your fork with the latest version of the dotsquares-ai repository.
 
 ## Coding Standards
 
 ### Frontend (React/TypeScript)
+
 - Use TypeScript for all new code
 - Follow functional components with hooks
 - Use Tailwind CSS for styling
 - Add JSDoc comments for exported functions and components
 
 ### Backend (Rust)
+
 - Follow Rust standard conventions
 - Use `cargo fmt` for formatting
 - Use `cargo clippy` for linting
@@ -53,15 +55,17 @@ When submitting a pull request, please follow these guidelines:
 - Add comprehensive documentation with `///` comments
 
 ### Security Requirements
+
 - Validate all inputs from the frontend
 - Use prepared statements for database operations
 - Never log sensitive data (tokens, passwords, etc.)
 - Use secure defaults for all configurations
 
 ## Testing
+
 - Add tests for new functionality
 - Ensure all existing tests pass
 - Run `cargo test` for Rust code
 - Test the application manually before submitting
 
-Please adhere to the coding conventions, maintain clear documentation, and provide thorough testing for your contributions. 
+Please adhere to the coding conventions, maintain clear documentation, and provide thorough testing for your contributions.

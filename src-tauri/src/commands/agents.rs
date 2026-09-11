@@ -353,32 +353,32 @@ pub fn init_database(app: &AppHandle) -> SqliteResult<Connection> {
 /// runtime: an installed app has no copy of the repository, so a fresh
 /// install would otherwise start with an empty agent list.
 const BUILTIN_AGENTS: &[(&str, &str)] = &[
-    ("planner", include_str!("../../../cc_agents/planner.opcode.json")),
+    ("planner", include_str!("../../../cc_agents/planner.dotsquares-ai.json")),
     (
         "implementer",
-        include_str!("../../../cc_agents/implementer.opcode.json"),
+        include_str!("../../../cc_agents/implementer.dotsquares-ai.json"),
     ),
-    ("tester", include_str!("../../../cc_agents/tester.opcode.json")),
+    ("tester", include_str!("../../../cc_agents/tester.dotsquares-ai.json")),
     (
         "code-reviewer",
-        include_str!("../../../cc_agents/code-reviewer.opcode.json"),
+        include_str!("../../../cc_agents/code-reviewer.dotsquares-ai.json"),
     ),
-    ("debugger", include_str!("../../../cc_agents/debugger.opcode.json")),
+    ("debugger", include_str!("../../../cc_agents/debugger.dotsquares-ai.json")),
     (
         "documenter",
-        include_str!("../../../cc_agents/documenter.opcode.json"),
+        include_str!("../../../cc_agents/documenter.dotsquares-ai.json"),
     ),
     (
         "security-scanner",
-        include_str!("../../../cc_agents/security-scanner.opcode.json"),
+        include_str!("../../../cc_agents/security-scanner.dotsquares-ai.json"),
     ),
     (
         "unit-tests-bot",
-        include_str!("../../../cc_agents/unit-tests-bot.opcode.json"),
+        include_str!("../../../cc_agents/unit-tests-bot.dotsquares-ai.json"),
     ),
     (
         "git-commit-bot",
-        include_str!("../../../cc_agents/git-commit-bot.opcode.json"),
+        include_str!("../../../cc_agents/git-commit-bot.dotsquares-ai.json"),
     ),
 ];
 
@@ -2006,12 +2006,12 @@ pub async fn fetch_github_agents() -> Result<Vec<GitHubAgentFile>, String> {
     info!("Fetching agents from GitHub repository...");
 
     let client = reqwest::Client::new();
-    let url = "https://api.github.com/repos/getAsterisk/opcode/contents/cc_agents";
+    let url = "https://api.github.com/repos/getAsterisk/dotsquares-ai/contents/cc_agents";
 
     let response = client
         .get(url)
         .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", "opcode-App")
+        .header("User-Agent", "dotsquares-ai-App")
         .send()
         .await
         .map_err(|e| format!("Failed to fetch from GitHub: {}", e))?;
@@ -2027,10 +2027,10 @@ pub async fn fetch_github_agents() -> Result<Vec<GitHubAgentFile>, String> {
         .await
         .map_err(|e| format!("Failed to parse GitHub response: {}", e))?;
 
-    // Filter only .opcode.json agent files
+    // Filter only .dotsquares-ai.json agent files
     let agent_files: Vec<GitHubAgentFile> = api_files
         .into_iter()
-        .filter(|f| f.name.ends_with(".opcode.json") && f.file_type == "file")
+        .filter(|f| f.name.ends_with(".dotsquares-ai.json") && f.file_type == "file")
         .filter_map(|f| {
             f.download_url.map(|download_url| GitHubAgentFile {
                 name: f.name,
@@ -2055,7 +2055,7 @@ pub async fn fetch_github_agent_content(download_url: String) -> Result<AgentExp
     let response = client
         .get(&download_url)
         .header("Accept", "application/json")
-        .header("User-Agent", "opcode-App")
+        .header("User-Agent", "dotsquares-ai-App")
         .send()
         .await
         .map_err(|e| format!("Failed to download agent: {}", e))?;

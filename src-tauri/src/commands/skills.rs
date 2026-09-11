@@ -355,7 +355,7 @@ mod tests {
 
     fn temp_dir(label: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "opcode-skills-test-{}-{}",
+            "dotsquares-ai-skills-test-{}-{}",
             label,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

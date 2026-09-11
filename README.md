@@ -27,36 +27,43 @@ dotsquares CodAI bridges this gap by wrapping cutting-edge agent runtimes with a
 ## ✨ Key Features
 
 ### 🤖 Autonomous Agent Workstation
+
 - **Multi-Agent Orchestration**: Spin up dedicated coding agents to triage issues, refactor modules, write unit tests, and build features autonomously.
 - **GitHub Agent Browser**: Discover, download, and execute specialized agent templates and recipes directly from community repositories.
 - **Interactive Clarifications**: Human-in-the-loop dialogs (`AgentQuestionDialog`) allow agents to ask clarifying questions before committing irreversible actions.
 - **Execution Output Streamer**: Rich real-time logs with ANSI color parsing, formatted tool calls, and error tracking.
 
 ### 💻 Dual Execution Modes
+
 - **Native Desktop App**: Built on Tauri v2 for low-memory overhead, native window styling, transparent macOS vibrancy, and high-speed local IPC.
-- **Web Server & Remote Mode (`opcode-web`)**: Run the built-in Axum web server (`just web`) to interact with Claude Code through any modern web browser or mobile phone on your local network.
+- **Web Server & Remote Mode (`dotsquares-ai-web`)**: Run the built-in Axum web server (`just web`) to interact with Claude Code through any modern web browser or mobile phone on your local network.
 
 ### 🔌 Model Context Protocol (MCP) Hub
+
 - **Server Registry & Manager**: Add, inspect, configure, and monitor MCP servers with ease.
 - **Tool Discovery & Testing**: Dynamically inspect exposed MCP tools and test execution against live environments.
 - **Import / Export**: Easily backup or share your MCP configuration profiles across teams.
 
 ### ⏳ Git-Backed Checkpoints & Timeline Time-Travel
+
 - **Automated Micro-Checkpoints**: Automatically snapshot project states prior to executing agent code edits.
 - **Interactive Timeline**: Visually inspect step-by-step diffs with side-by-side highlighting.
 - **One-Click Rollbacks**: Revert unintended code modifications instantly with zero loss of previous history.
 
 ### 📋 Integrated Task Board (Kanban)
-- **Agile Ticket Management**: Organize development goals into *To Do*, *In Progress*, and *Completed* columns.
+
+- **Agile Ticket Management**: Organize development goals into _To Do_, _In Progress_, and _Completed_ columns.
 - **Agent Task Dispatch**: Directly attach agent sessions to tickets for targeted feature implementation.
 - **Ticket Import / Export**: Import issues from external issue trackers or export sprint reports as JSON/CSV.
 
 ### 📊 Token & Cost Telemetry Dashboard
+
 - **Real-Time Token Monitoring**: Live breakdown of input tokens, output tokens, and cache hits per session.
 - **Cost Estimation**: Accurate usage and financial estimation across Claude 3.5 Sonnet, Claude 3 Opus, and custom endpoints.
 - **Visual Analytics**: Interactive usage charts powered by Recharts to identify cost drivers across long agent sessions.
 
 ### 🛠️ Developer Tooling & Productivity
+
 - **Slash Command Manager**: Quick trigger menu (`/commit`, `/test`, `/explain`, etc.) with customizable user macros.
 - **Pre & Post Hooks Editor**: Configure automated shell hooks that trigger before or after agent tasks.
 - **Syntax-Highlighted File Viewer & Editor**: Review code, markdown documentation, and media assets inline.
@@ -84,14 +91,14 @@ dotsquares CodAI bridges this gap by wrapping cutting-edge agent runtimes with a
 └──────────────────────────────┴──────────────────────────────┘
 ```
 
-| Layer | Technologies |
-| :--- | :--- |
-| **Frontend UI** | [React 18](https://react.dev/), [TypeScript](https://www.typescriptlang.org/), [Vite](https://vitejs.dev/), [Tailwind CSS 4](https://tailwindcss.com/) |
-| **UI Components** | [Radix UI](https://www.radix-ui.com/), [Lucide Icons](https://lucide.dev/), [Framer Motion](https://www.framer.com/motion/) |
-| **State & Data** | [Zustand](https://github.com/pmndrs/zustand), [TanStack Virtual](https://tanstack.com/virtual), [Recharts](https://recharts.org/) |
-| **Desktop Runtime** | [Tauri v2](https://tauri.app/) (Rust 2021) |
-| **Backend Core** | [Tokio](https://tokio.rs/), [Axum](https://github.com/tokio-rs/axum) (WebSockets & REST), [Rusqlite](https://github.com/rusqlite/rusqlite) (SQLite) |
-| **Integrations** | [Claude Code CLI](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview), Model Context Protocol (MCP), Git VCS |
+| Layer               | Technologies                                                                                                                                           |
+| :------------------ | :----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Frontend UI**     | [React 18](https://react.dev/), [TypeScript](https://www.typescriptlang.org/), [Vite](https://vitejs.dev/), [Tailwind CSS 4](https://tailwindcss.com/) |
+| **UI Components**   | [Radix UI](https://www.radix-ui.com/), [Lucide Icons](https://lucide.dev/), [Framer Motion](https://www.framer.com/motion/)                            |
+| **State & Data**    | [Zustand](https://github.com/pmndrs/zustand), [TanStack Virtual](https://tanstack.com/virtual), [Recharts](https://recharts.org/)                      |
+| **Desktop Runtime** | [Tauri v2](https://tauri.app/) (Rust 2021)                                                                                                             |
+| **Backend Core**    | [Tokio](https://tokio.rs/), [Axum](https://github.com/tokio-rs/axum) (WebSockets & REST), [Rusqlite](https://github.com/rusqlite/rusqlite) (SQLite)    |
+| **Integrations**    | [Claude Code CLI](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview), Model Context Protocol (MCP), Git VCS                     |
 
 ---
 
@@ -132,18 +139,20 @@ Before running or building **dotsquares CodAI**, ensure your system has the foll
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/prajjwal/opcode.git
-cd opcode
+git clone https://github.com/prajjwal/dotsquares-ai.git
+cd dotsquares-ai
 ```
 
 ### 2. Install Dependencies
 
 Using Bun (preferred):
+
 ```bash
 bun install
 ```
 
 Or using npm:
+
 ```bash
 npm install
 ```
@@ -173,10 +182,12 @@ just web-port 8080
 ```
 
 Once running, access the web dashboard via your browser:
+
 ```
 http://localhost:8080
 ```
-*(Or your local network IP: `http://<your-ip>:8080` for mobile access)*
+
+_(Or your local network IP: `http://<your-ip>:8080` for mobile access)_
 
 ---
 
@@ -186,36 +197,36 @@ This project supports standard package runner scripts as well as a [`justfile`](
 
 ### Package Manager Scripts
 
-| Command | Action |
-| :--- | :--- |
-| `bun run dev` | Starts the Vite development server (frontend only) |
-| `bun run build` | Compiles TypeScript and builds the production frontend |
-| `bun run tauri dev` | Starts both frontend and Tauri desktop application |
-| `bun run tauri build` | Creates production desktop executables / installers |
-| `bun run build:dmg` | Builds a standalone `.dmg` installer for macOS |
-| `bun run check` | Runs TypeScript typechecks and Cargo check |
+| Command               | Action                                                 |
+| :-------------------- | :----------------------------------------------------- |
+| `bun run dev`         | Starts the Vite development server (frontend only)     |
+| `bun run build`       | Compiles TypeScript and builds the production frontend |
+| `bun run tauri dev`   | Starts both frontend and Tauri desktop application     |
+| `bun run tauri build` | Creates production desktop executables / installers    |
+| `bun run build:dmg`   | Builds a standalone `.dmg` installer for macOS         |
+| `bun run check`       | Runs TypeScript typechecks and Cargo check             |
 
 ### Justfile Commands
 
-| Command | Action |
-| :--- | :--- |
-| `just run` | Builds frontend and starts the Tauri desktop application |
-| `just web` | Builds frontend and runs the web server mode |
-| `just web-port <PORT>` | Starts the web server on a custom port |
-| `just build-backend` | Compiles debug Rust backend in `src-tauri` |
-| `just build-backend-release` | Compiles optimized release Rust backend |
-| `just test` | Executes Rust backend test suite |
-| `just check` | Runs `cargo check` for syntax and type errors |
-| `just fmt` | Formats all Rust backend code with `cargo fmt` |
-| `just ip` | Displays your machine's local IP for mobile access |
-| `just clean` | Removes `dist`, `node_modules`, and Cargo target artifacts |
+| Command                      | Action                                                     |
+| :--------------------------- | :--------------------------------------------------------- |
+| `just run`                   | Builds frontend and starts the Tauri desktop application   |
+| `just web`                   | Builds frontend and runs the web server mode               |
+| `just web-port <PORT>`       | Starts the web server on a custom port                     |
+| `just build-backend`         | Compiles debug Rust backend in `src-tauri`                 |
+| `just build-backend-release` | Compiles optimized release Rust backend                    |
+| `just test`                  | Executes Rust backend test suite                           |
+| `just check`                 | Runs `cargo check` for syntax and type errors              |
+| `just fmt`                   | Formats all Rust backend code with `cargo fmt`             |
+| `just ip`                    | Displays your machine's local IP for mobile access         |
+| `just clean`                 | Removes `dist`, `node_modules`, and Cargo target artifacts |
 
 ---
 
 ## 📁 Project Directory Structure
 
 ```plaintext
-opcode/
+dotsquares-ai/
 ├── cc_agents/             # Agent templates, configurations, and specialized recipes
 ├── dist/                  # Production frontend build output
 ├── scripts/               # Binary download, build, and packaging helper scripts

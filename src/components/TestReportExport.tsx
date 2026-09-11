@@ -21,7 +21,7 @@ import { api, type TestReportStatus } from "@/lib/api";
 import { isTauri } from "@/lib/apiAdapter";
 
 interface TestReportExportProps {
-  /** The project whose `.opcode/test-report.json` is exported. */
+  /** The project whose `.dotsquares-ai/test-report.json` is exported. */
   projectPath: string;
   /**
    * Change this to make the component look again — a run that has just
@@ -60,7 +60,7 @@ function downloadUrl(projectPath: string): string {
  * Downloads a Tester run's test documentation as an Excel workbook.
  *
  * The button only appears once a report exists: it is the Tester agent that
- * writes `.opcode/test-report.json`, and offering a download for a file no run
+ * writes `.dotsquares-ai/test-report.json`, and offering a download for a file no run
  * has produced yet is a dead end rather than a feature.
  */
 export const TestReportExport: React.FC<TestReportExportProps> = ({
@@ -121,7 +121,10 @@ export const TestReportExport: React.FC<TestReportExportProps> = ({
       });
       if (typeof target !== "string") return;
 
-      const result = await api.exportTestReport({ projectPath, filePath: target });
+      const result = await api.exportTestReport({
+        projectPath,
+        filePath: target,
+      });
       setSavedTo(result.file_path);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -179,14 +182,14 @@ export const TestReportExport: React.FC<TestReportExportProps> = ({
             <DialogDescription>
               {unreadable ? (
                 <>
-                  A report is there but could not be read. Ask the Tester agent to
-                  write it again.
+                  A report is there but could not be read. Ask the Tester agent
+                  to write it again.
                 </>
               ) : (
                 <>
                   {status.feature || "This project's test report"}
-                  {status.generated_at && <> · {status.generated_at}</>} · exported
-                  as one workbook of {SHEETS.length} sheets.
+                  {status.generated_at && <> · {status.generated_at}</>} ·
+                  exported as one workbook of {SHEETS.length} sheets.
                 </>
               )}
             </DialogDescription>
@@ -244,7 +247,8 @@ export const TestReportExport: React.FC<TestReportExportProps> = ({
                 )}
 
                 <p className="text-xs text-muted-foreground">
-                  Sheets: <span className="font-mono">{SHEETS.join(" · ")}</span>
+                  Sheets:{" "}
+                  <span className="font-mono">{SHEETS.join(" · ")}</span>
                 </p>
               </>
             )}
@@ -328,7 +332,7 @@ const Tally: React.FC<{
         "text-lg font-semibold tabular-nums",
         tone === "pass" && "text-emerald-400",
         tone === "fail" && "text-red-400",
-        tone === "warn" && "text-amber-400"
+        tone === "warn" && "text-amber-400",
       )}
     >
       {value}

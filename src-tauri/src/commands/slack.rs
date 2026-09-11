@@ -23,7 +23,7 @@ use crate::commands::agents::AgentDb;
 
 const API: &str = "https://slack.com/api";
 
-/// The channel opcode posts to unless told otherwise.
+/// The channel dotsquares-ai posts to unless told otherwise.
 const DEFAULT_CHANNEL: &str = "dotsquares-ai";
 
 /// How often a question's thread is checked for a reply.
@@ -219,7 +219,7 @@ pub async fn test_slack_connection(db: State<'_, AgentDb>) -> Result<String, Str
     }
 
     let who = auth_test(&settings).await?;
-    let posted = post(&settings, "opcode is connected to this channel.").await?;
+    let posted = post(&settings, "dotsquares-ai is connected to this channel.").await?;
     // Reading the message back proves the history scope is there too - without
     // it questions would go out and no answer could ever be read.
     let history = match fetch_thread_reply(&settings, &posted.channel, &posted.ts).await {
@@ -337,7 +337,7 @@ fn explain(s: &SlackSettings, body: &Value) -> Failed {
             s.channel_label()
         ),
         "is_archived" => format!(
-            "{} is archived. Un-archive it, or point opcode at another channel.",
+            "{} is archived. Un-archive it, or point dotsquares-ai at another channel.",
             s.channel_label()
         ),
         "ratelimited" => "Slack is rate-limiting this token.".to_string(),
@@ -352,7 +352,7 @@ fn explain(s: &SlackSettings, body: &Value) -> Failed {
 /// Channel ids already worked out, keyed by the setting they came from.
 ///
 /// Finding a channel by name costs a `conversations.list` walk, and the answer
-/// does not change while opcode is running - so it is worked out once per
+/// does not change while dotsquares-ai is running - so it is worked out once per
 /// token/name and then reused. Cleared whenever the settings are saved, and
 /// whenever a post suggests the id has stopped being right.
 static RESOLVED: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
@@ -715,7 +715,7 @@ pub async fn ask(
     options: &[String],
 ) -> Result<Posted, String> {
     let mut text = format!(
-        "*opcode* · run #{} — {}\nThe agent needs a decision:\n> {}\n",
+        "*dotsquares-ai* · run #{} — {}\nThe agent needs a decision:\n> {}\n",
         run_id,
         task_title(task),
         question.replace('\n', "\n> ")
@@ -823,7 +823,7 @@ pub fn notify_question(app: &AppHandle, run_id: i64, channel: Option<&str>) {
             "Reply in the {} thread and the run carries on.",
             channel
         ),
-        None => "Answer it in opcode. Set up Slack in Settings → Slack and these come to \
+        None => "Answer it in dotsquares-ai. Set up Slack in Settings → Slack and these come to \
                  you there instead."
             .to_string(),
     };

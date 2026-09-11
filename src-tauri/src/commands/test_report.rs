@@ -1,8 +1,8 @@
 //! The test documentation a Tester run leaves behind, and its export to Excel.
 //!
-//! The Tester agent writes one machine-readable file, `.opcode/test-report.json`,
+//! The Tester agent writes one machine-readable file, `.dotsquares-ai/test-report.json`,
 //! alongside whatever it says in the chat. Prose in a transcript cannot be
-//! filtered, sorted or handed to someone who does not have opcode open, so the
+//! filtered, sorted or handed to someone who does not have dotsquares-ai open, so the
 //! structured file is what this module turns into a workbook: one row per test
 //! case, per device checked, per defect found.
 //!
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Where the Tester agent is told to leave its report.
-pub const REPORT_RELATIVE_PATH: &str = ".opcode/test-report.json";
+pub const REPORT_RELATIVE_PATH: &str = ".dotsquares-ai/test-report.json";
 
 /// Names that are accepted as well, in order.
 ///
@@ -25,9 +25,9 @@ pub const REPORT_RELATIVE_PATH: &str = ".opcode/test-report.json";
 /// those costs nothing and saves a person from re-running a long test pass to
 /// fix a filename.
 const REPORT_CANDIDATES: &[&str] = &[
-    ".opcode/test-report.json",
-    ".opcode/test_report.json",
-    ".opcode/tests.json",
+    ".dotsquares-ai/test-report.json",
+    ".dotsquares-ai/test_report.json",
+    ".dotsquares-ai/tests.json",
     "test-report.json",
 ];
 
@@ -662,7 +662,7 @@ pub fn load_report(project_path: &str) -> Result<(PathBuf, TestReport), String> 
         .map_err(|e| format!("Could not read {}: {}", path.display(), e))?;
 
     let report: TestReport = serde_json::from_str(&text)
-        .map_err(|e| format!("{} is not a test report opcode can read: {}", path.display(), e))?;
+        .map_err(|e| format!("{} is not a test report dotsquares-ai can read: {}", path.display(), e))?;
 
     Ok((path, report))
 }
@@ -936,7 +936,7 @@ pub const SHEET_NAMES: &[&str] = &[
 ///
 /// Bytes rather than a file because the same workbook is served two ways: saved
 /// through a native dialog on the desktop, and streamed over HTTP to a phone
-/// browser driving opcode remotely.
+/// browser driving dotsquares-ai remotely.
 pub fn build_workbook(report: &TestReport) -> Result<Vec<u8>, String> {
     let styles = Styles::new();
     let counts = report.counts();
@@ -1584,7 +1584,7 @@ mod tests {
 
     #[test]
     fn the_report_is_found_under_the_neighbouring_names_too() {
-        for name in [".opcode/test-report.json", ".opcode/test_report.json", "test-report.json"] {
+        for name in [".dotsquares-ai/test-report.json", ".dotsquares-ai/test_report.json", "test-report.json"] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join(name);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1599,7 +1599,7 @@ mod tests {
     #[test]
     fn a_report_that_is_there_but_unreadable_is_a_different_state_from_none() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(".opcode/test-report.json");
+        let path = dir.path().join(".dotsquares-ai/test-report.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "not json at all").unwrap();
 

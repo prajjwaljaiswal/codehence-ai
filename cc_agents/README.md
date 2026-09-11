@@ -1,8 +1,8 @@
-# 🤖 opcode CC Agents
+# 🤖 dotsquares-ai CC Agents
 
 <div align="center">
   <p>
-    <strong>Pre-built AI agents for opcode powered by Claude Code</strong>
+    <strong>Pre-built AI agents for dotsquares-ai powered by Claude Code</strong>
   </p>
   <p>
     <a href="#available-agents">Browse Agents</a> •
@@ -16,16 +16,17 @@
 
 ## 📦 Available Agents
 
-| Agent | Model | Description | Default Task |
-|-------|-------|-------------|--------------|
-| **🎯 Git Commit Bot**<br/>🤖 `bot` | <img src="https://img.shields.io/badge/Sonnet-blue?style=flat-square" alt="Sonnet"> | **Automate your Git workflow with intelligent commit messages**<br/><br/>Analyzes Git repository changes, generates detailed commit messages following Conventional Commits specification, and pushes changes to remote repository. | "Push all changes." |
-| **🛡️ Security Scanner**<br/>🛡️ `shield` | <img src="https://img.shields.io/badge/Opus-purple?style=flat-square" alt="Opus"> | **Advanced AI-powered Static Application Security Testing (SAST)**<br/><br/>Performs comprehensive security audits by spawning specialized sub-agents for: codebase intelligence gathering, threat modeling (STRIDE), vulnerability scanning (OWASP Top 10, CWE), exploit validation, remediation design, and professional report generation. | "Review the codebase for security issues." |
-| **🧪 Tester**<br/>🧪 `beaker` | <img src="https://img.shields.io/badge/Opus-purple?style=flat-square" alt="Opus"> | **Full-coverage feature testing, including mobile**<br/><br/>Tests every path through a feature: happy paths, the edge-case checklist (data, collections, files, concurrency, failure, security-adjacent, interface), and mobile as a first-class surface — device matrix, touch targets, keyboard, lifecycle, network, permissions, deep links — driving real devices with [Maestro](https://maestro.dev) where one is available. Writes `.opcode/test-report.json`, which opcode exports as a six-sheet Excel workbook. | "Test this feature fully - every path, its edge cases, and mobile - then write .opcode/test-report.json" |
-| **🧪 Unit Tests Bot**<br/>💻 `code` | <img src="https://img.shields.io/badge/Opus-purple?style=flat-square" alt="Opus"> | **Automated comprehensive unit test generation for any codebase**<br/><br/>Analyzes codebase and generates comprehensive unit tests by: analyzing code structure, creating test plans, writing tests matching your style, verifying execution, optimizing coverage (>80% overall, 100% critical paths), and generating documentation. | "Generate unit tests for this codebase." |
+| Agent                                   | Model                                                                               | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Default Task                                                                                                    |
+| --------------------------------------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| **🎯 Git Commit Bot**<br/>🤖 `bot`      | <img src="https://img.shields.io/badge/Sonnet-blue?style=flat-square" alt="Sonnet"> | **Automate your Git workflow with intelligent commit messages**<br/><br/>Analyzes Git repository changes, generates detailed commit messages following Conventional Commits specification, and pushes changes to remote repository.                                                                                                                                                                                                                                                                                                     | "Push all changes."                                                                                             |
+| **🛡️ Security Scanner**<br/>🛡️ `shield` | <img src="https://img.shields.io/badge/Opus-purple?style=flat-square" alt="Opus">   | **Advanced AI-powered Static Application Security Testing (SAST)**<br/><br/>Performs comprehensive security audits by spawning specialized sub-agents for: codebase intelligence gathering, threat modeling (STRIDE), vulnerability scanning (OWASP Top 10, CWE), exploit validation, remediation design, and professional report generation.                                                                                                                                                                                           | "Review the codebase for security issues."                                                                      |
+| **🧪 Tester**<br/>🧪 `beaker`           | <img src="https://img.shields.io/badge/Opus-purple?style=flat-square" alt="Opus">   | **Full-coverage feature testing, including mobile**<br/><br/>Tests every path through a feature: happy paths, the edge-case checklist (data, collections, files, concurrency, failure, security-adjacent, interface), and mobile as a first-class surface — device matrix, touch targets, keyboard, lifecycle, network, permissions, deep links — driving real devices with [Maestro](https://maestro.dev) where one is available. Writes `.dotsquares-ai/test-report.json`, which dotsquares-ai exports as a six-sheet Excel workbook. | "Test this feature fully - every path, its edge cases, and mobile - then write .dotsquares-ai/test-report.json" |
+| **🧪 Unit Tests Bot**<br/>💻 `code`     | <img src="https://img.shields.io/badge/Opus-purple?style=flat-square" alt="Opus">   | **Automated comprehensive unit test generation for any codebase**<br/><br/>Analyzes codebase and generates comprehensive unit tests by: analyzing code structure, creating test plans, writing tests matching your style, verifying execution, optimizing coverage (>80% overall, 100% critical paths), and generating documentation.                                                                                                                                                                                                   | "Generate unit tests for this codebase."                                                                        |
 
 ### Available Icons
 
 Choose from these icon options when creating agents:
+
 - `bot` - 🤖 General purpose
 - `shield` - 🛡️ Security related
 - `code` - 💻 Development
@@ -41,7 +42,7 @@ Choose from these icon options when creating agents:
 
 ### Method 1: Import from GitHub (Recommended)
 
-1. In opcode, navigate to **CC Agents**
+1. In dotsquares-ai, navigate to **CC Agents**
 2. Click the **Import** dropdown button
 3. Select **From GitHub**
 4. Browse available agents from the official repository
@@ -49,24 +50,24 @@ Choose from these icon options when creating agents:
 
 ### Method 2: Import from Local File
 
-1. Download a `.opcode.json` file from this repository
-2. In opcode, navigate to **CC Agents**
+1. Download a `.dotsquares-ai.json` file from this repository
+2. In dotsquares-ai, navigate to **CC Agents**
 3. Click the **Import** dropdown button
 4. Select **From File**
-5. Choose the downloaded `.opcode.json` file
+5. Choose the downloaded `.dotsquares-ai.json` file
 
 ## 📤 Exporting Agents
 
 ### Export Your Custom Agents
 
-1. In opcode, navigate to **CC Agents**
+1. In dotsquares-ai, navigate to **CC Agents**
 2. Find your agent in the grid
 3. Click the **Export** button
-4. Choose where to save the `.opcode.json` file
+4. Choose where to save the `.dotsquares-ai.json` file
 
 ### Agent File Format
 
-All agents are stored in `.opcode.json` format with the following structure:
+All agents are stored in `.dotsquares-ai.json` format with the following structure:
 
 ```json
 {
@@ -89,13 +90,15 @@ All agents are stored in `.opcode.json` format with the following structure:
 The agent import/export system is built on a robust architecture:
 
 #### Backend (Rust/Tauri)
+
 - **Storage**: SQLite database stores agent configurations
 - **Export**: Serializes agent data to JSON with version control
 - **Import**: Validates and deduplicates agents on import
 - **GitHub Integration**: Fetches agents via GitHub API
 
 #### Frontend (React/TypeScript)
-- **UI Components**: 
+
+- **UI Components**:
   - `CCAgents.tsx` - Main agent management interface
   - `GitHubAgentBrowser.tsx` - GitHub repository browser
   - `CreateAgent.tsx` - Agent creation/editing form
@@ -114,14 +117,17 @@ The agent import/export system is built on a robust architecture:
 We welcome agent contributions! Here's how to add your agent:
 
 ### 1. Create Your Agent
-Design and test your agent in opcode with a clear, focused purpose.
+
+Design and test your agent in dotsquares-ai with a clear, focused purpose.
 
 ### 2. Export Your Agent
-Export your agent to a `.opcode.json` file with a descriptive name.
+
+Export your agent to a `.dotsquares-ai.json` file with a descriptive name.
 
 ### 3. Submit a Pull Request
+
 1. Fork this repository
-2. Add your `.opcode.json` file to the `cc_agents` directory
+2. Add your `.dotsquares-ai.json` file to the `cc_agents` directory
 3. Update this README with your agent's details
 4. Submit a PR with a description of what your agent does
 
@@ -134,10 +140,10 @@ Export your agent to a `.opcode.json` file with a descriptive name.
 
 ## 📜 License
 
-These agents are provided under the same license as the opcode project. See the main LICENSE file for details.
+These agents are provided under the same license as the dotsquares-ai project. See the main LICENSE file for details.
 
 ---
 
 <div align="center">
-  <strong>Built with ❤️ by the opcode community</strong>
-</div> 
+  <strong>Built with ❤️ by the dotsquares-ai community</strong>
+</div>

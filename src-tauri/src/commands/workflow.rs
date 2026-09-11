@@ -1066,7 +1066,7 @@ pub async fn run_workflow(
         "TESTS FAILING"
     };
     let message = format!(
-        "{}\n\nAutomated run by opcode ({}), {} iteration(s).\n",
+        "{}\n\nAutomated run by dotsquares-ai ({}), {} iteration(s).\n",
         cfg.task.lines().next().unwrap_or("Automated change"),
         verdict,
         outcome.iterations_used
@@ -1170,7 +1170,7 @@ pub async fn run_workflow(
             .unwrap_or("Automated change")
             .to_string();
         let body = format!(
-            "Automated run by opcode.\n\n\
+            "Automated run by dotsquares-ai.\n\n\
              **Task**\n{}\n\n\
              **Verification**\n`{}` - {}\n\n\
              **Run details**\n- Base: `{}` @ `{}`\n- Iterations: {}/{}\n",
@@ -1404,7 +1404,7 @@ async fn run_ticket_in_worktree(
 
         let repo = git::repo_root(&PathBuf::from(&board.repo_path))?;
         let path = worktree_path(app, run_id)?;
-        let branch = git::build_branch_name("opcode", &ticket.title, run_id);
+        let branch = git::build_branch_name("dotsquares-ai", &ticket.title, run_id);
         git::add_worktree(&repo, &path, &branch, module_branch)?;
 
         let cfg = WorkflowConfig {
@@ -1413,7 +1413,7 @@ async fn run_ticket_in_worktree(
             system_prompt,
             model,
             test_command: board.test_command.clone(),
-            branch_prefix: "opcode".to_string(),
+            branch_prefix: "dotsquares-ai".to_string(),
             max_iterations: DEFAULT_MAX_ITERATIONS,
             auto_push: false,
             open_pr: false,
@@ -1513,7 +1513,7 @@ async fn run_ticket_on_main(
             system_prompt,
             model,
             test_command: board.test_command.clone(),
-            branch_prefix: "opcode".to_string(),
+            branch_prefix: "dotsquares-ai".to_string(),
             max_iterations: DEFAULT_MAX_ITERATIONS,
             auto_push: false,
             open_pr: false,
@@ -1674,7 +1674,7 @@ async fn resolve_conflict(
         system_prompt,
         model,
         test_command: None,
-        branch_prefix: "opcode".to_string(),
+        branch_prefix: "dotsquares-ai".to_string(),
         max_iterations: 1,
         auto_push: false,
         open_pr: false,
@@ -1843,7 +1843,7 @@ async fn run_module_inner_multibranch(
     let repo = git::repo_root(&PathBuf::from(&board.repo_path))?;
     let base = git::default_branch(&repo)?;
     let module_branch = format!(
-        "opcode/module/{}-{}",
+        "dotsquares-ai/module/{}-{}",
         git::slugify(name),
         chrono::Utc::now().timestamp()
     );
@@ -2095,7 +2095,7 @@ fn begin_run(
         system_prompt,
         model: model.unwrap_or(agent_model),
         test_command: test_command.filter(|s| !s.trim().is_empty()),
-        branch_prefix: branch_prefix.unwrap_or_else(|| "opcode".to_string()),
+        branch_prefix: branch_prefix.unwrap_or_else(|| "dotsquares-ai".to_string()),
         max_iterations: max_iterations
             .unwrap_or(DEFAULT_MAX_ITERATIONS)
             .clamp(1, 10),
@@ -2238,9 +2238,9 @@ fn begin_run(
 }
 
 /// What an interrupted run reports, so it is not mistaken for a real failure.
-const INTERRUPTED_MESSAGE: &str = "opcode stopped while this run was going, so it never finished.";
+const INTERRUPTED_MESSAGE: &str = "dotsquares-ai stopped while this run was going, so it never finished.";
 
-/// Close out runs that were still going when opcode last stopped.
+/// Close out runs that were still going when dotsquares-ai last stopped.
 ///
 /// A run lives in a task inside this process: when the process goes, so does
 /// the run - but its row still says `running` and its ticket still sits in
@@ -2338,7 +2338,7 @@ async fn notify_outcome(app: &AppHandle, run_id: i64, task: &str, phase: Phase, 
     slack::notify_run(
         app,
         format!(
-            "{} *opcode* · run #{} — {}\n{}",
+            "{} *dotsquares-ai* · run #{} — {}\n{}",
             mark,
             run_id,
             slack::task_title(task),
@@ -2815,7 +2815,7 @@ mod tests {
             system_prompt: "".into(),
             model: "sonnet".into(),
             test_command: Some("bun test".into()),
-            branch_prefix: "opcode".into(),
+            branch_prefix: "dotsquares-ai".into(),
             max_iterations: 3,
             auto_push: true,
             open_pr: true,
@@ -2995,7 +2995,7 @@ mod tests {
             system_prompt: String::new(),
             model: "sonnet".into(),
             test_command: None,
-            branch_prefix: "opcode".into(),
+            branch_prefix: "dotsquares-ai".into(),
             max_iterations: 3,
             auto_push: false,
             open_pr: false,

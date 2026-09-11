@@ -1141,9 +1141,9 @@ mod tests {
         // A version manager keeps `node` next to `claude`; without the parent
         // directory on PATH the shim runs and then cannot find its runtime.
         let program = if cfg!(windows) {
-            r"C:\opcode-test-not-on-path\claude.cmd"
+            r"C:\dotsquares-ai-test-not-on-path\claude.cmd"
         } else {
-            "/opcode-test-not-on-path/claude"
+            "/dotsquares-ai-test-not-on-path/claude"
         };
         let path = child_path(program).expect("PATH should be set on the child");
         let parent = parent_of(program);

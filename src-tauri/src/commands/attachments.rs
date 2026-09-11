@@ -90,7 +90,7 @@ fn looks_like_text(path: &Path) -> bool {
 
 /// Directory holding text conversions of binary documents
 fn conversions_dir() -> PathBuf {
-    std::env::temp_dir().join("opcode-attachments")
+    std::env::temp_dir().join("dotsquares-ai-attachments")
 }
 
 /// Convert a document Read can't open into a plain-text file it can.
@@ -228,7 +228,7 @@ mod tests {
 
     fn temp_file(name: &str, contents: &[u8]) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "opcode-attachment-test-{}",
+            "dotsquares-ai-attachment-test-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -294,7 +294,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_directories_and_missing_files() {
-        let dir = std::env::temp_dir().join("opcode-attachment-test-dir");
+        let dir = std::env::temp_dir().join("dotsquares-ai-attachment-test-dir");
         fs::create_dir_all(&dir).unwrap();
         let err = prepare_attachment(dir.to_string_lossy().to_string())
             .await
