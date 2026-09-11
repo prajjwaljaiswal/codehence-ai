@@ -1,15 +1,2 @@
 [target.aarch64-unknown-linux-gnu]
 linker = "aarch64-linux-gnu-gcc"
-
-[target.x86_64-pc-windows-gnu]
-linker = "C:\\Users\\Admin\\scoop\\apps\\mingw\\current\\bin\\gcc.exe"
-ar = "C:\\Users\\Admin\\scoop\\apps\\mingw\\current\\bin\\ar.exe"
-
-[env]
-PKG_CONFIG_ALLOW_CROSS = "1"
-CC = "C:\\Users\\Admin\\scoop\\apps\\mingw\\current\\bin\\gcc.exe"
-AR = "C:\\Users\\Admin\\scoop\\apps\\mingw\\current\\bin\\ar.exe"
-TARGET_CC = "C:\\Users\\Admin\\scoop\\apps\\mingw\\current\\bin\\gcc.exe"
-TARGET_AR = "C:\\Users\\Admin\\scoop\\apps\\mingw\\current\\bin\\ar.exe"
-CC_x86_64_pc_windows_gnu = "C:\\Users\\Admin\\scoop\\apps\\mingw\\current\\bin\\gcc.exe"
-AR_x86_64_pc_windows_gnu = "C:\\Users\\Admin\\scoop\\apps\\mingw\\current\\bin\\ar.exe"
