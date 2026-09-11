@@ -28,6 +28,7 @@ import { HooksEditor } from "./HooksEditor";
 import { SlashCommandsManager } from "./SlashCommandsManager";
 import { SkillsManager } from "./SkillsManager";
 import { ProxySettings } from "./ProxySettings";
+import { SlackSettings } from "./SlackSettings";
 import { useTheme, useTrackEvent } from "@/hooks";
 import { analytics } from "@/lib/analytics";
 import { TabPersistenceService } from "@/services/tabPersistence";
@@ -394,7 +395,7 @@ export const Settings: React.FC<SettingsProps> = ({
       ) : (
         <div className="flex-1 overflow-y-auto p-6">
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsList className="grid grid-cols-9 w-full mb-6 h-auto p-1">
+            <TabsList className="grid grid-cols-10 w-full mb-6 h-auto p-1">
               <TabsTrigger value="general" className="py-2.5 px-3">General</TabsTrigger>
               <TabsTrigger value="permissions" className="py-2.5 px-3">Permissions</TabsTrigger>
               <TabsTrigger value="environment" className="py-2.5 px-3">Environment</TabsTrigger>
@@ -404,6 +405,7 @@ export const Settings: React.FC<SettingsProps> = ({
               <TabsTrigger value="skills" className="py-2.5 px-3">Skills</TabsTrigger>
               <TabsTrigger value="storage" className="py-2.5 px-3">Storage</TabsTrigger>
               <TabsTrigger value="proxy" className="py-2.5 px-3">Proxy</TabsTrigger>
+              <TabsTrigger value="slack" className="py-2.5 px-3">Slack</TabsTrigger>
             </TabsList>
             
             {/* General Settings */}
@@ -1055,6 +1057,13 @@ export const Settings: React.FC<SettingsProps> = ({
               <StorageTab />
             </TabsContent>
             
+            {/* Slack */}
+            <TabsContent value="slack">
+              <Card className="p-6">
+                <SlackSettings setToast={setToast} />
+              </Card>
+            </TabsContent>
+
             {/* Proxy Settings */}
             <TabsContent value="proxy">
               <Card className="p-6">

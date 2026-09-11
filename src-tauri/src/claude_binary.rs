@@ -58,6 +58,135 @@ fn first_launchable(where_output: &str, pathext: &str) -> (Option<String>, Vec<S
     (None, skipped)
 }
 
+/// Whether Windows would have to go through cmd.exe to start this program.
+fn is_batch_shim(program: &str) -> bool {
+    let lower = program.to_ascii_lowercase();
+    lower.ends_with(".cmd") || lower.ends_with(".bat")
+}
+
+/// Whether this token is already a full path rather than one relative to the
+/// shim. Spelled out by hand because `Path::is_absolute` does not recognise a
+/// `C:\` prefix anywhere except Windows, and this has to be testable on macOS.
+#[cfg_attr(all(not(windows), not(test)), allow(dead_code))]
+fn looks_absolute(token: &str) -> bool {
+    let bytes = token.as_bytes();
+    token.starts_with('\\')
+        || token.starts_with('/')
+        || (bytes.len() > 2 && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/'))
+}
+
+/// Resolve a path as written inside a batch shim against the shim's directory,
+/// expanding the `%dp0%` / `%~dp0` the shim uses to mean "next to me".
+#[cfg_attr(all(not(windows), not(test)), allow(dead_code))]
+fn expand_shim_path(token: &str, shim_dir: &std::path::Path) -> PathBuf {
+    let lower = token.to_ascii_lowercase();
+    for marker in ["%dp0%", "%~dp0"] {
+        if let Some(at) = lower.find(marker) {
+            let rest = token[at + marker.len()..].trim_start_matches(['\\', '/']);
+            return shim_dir.join(rest.replace('\\', std::path::MAIN_SEPARATOR_STR));
+        }
+    }
+    if looks_absolute(token) {
+        PathBuf::from(token)
+    } else {
+        shim_dir.join(token.replace('\\', std::path::MAIN_SEPARATOR_STR))
+    }
+}
+
+/// The `.js` entry points a Windows batch shim could be handing to Node.
+///
+/// npm, yarn and pnpm all write the same shape of `.cmd` shim, ending in a
+/// line like `"%_prog%" "%dp0%\node_modules\@anthropic-ai\claude-code\cli.js"
+/// %*`. Pulling that path back out lets Node be started with it directly.
+#[cfg_attr(all(not(windows), not(test)), allow(dead_code))]
+fn js_entries_in_shim(shim_text: &str, shim_dir: &std::path::Path) -> Vec<PathBuf> {
+    shim_text
+        .split(['"', '\'', ' ', '\t', '\r', '\n'])
+        .map(str::trim)
+        .filter(|token| token.to_ascii_lowercase().ends_with(".js"))
+        .map(|token| expand_shim_path(token, shim_dir))
+        .collect()
+}
+
+/// The directory a program lives in, looking it up on PATH when it was given
+/// as a bare name (`find_standard_installations` reports `claude.cmd` that
+/// way when it is only known to be somewhere on PATH).
+#[cfg(windows)]
+fn program_directory(program: &str) -> Option<PathBuf> {
+    if let Some(parent) = std::path::Path::new(program).parent() {
+        if !parent.as_os_str().is_empty() {
+            return Some(parent.to_path_buf());
+        }
+    }
+    std::env::var("PATH")
+        .ok()?
+        .split(PATH_SEPARATOR)
+        .filter(|dir| !dir.is_empty())
+        .map(std::path::Path::new)
+        .find(|dir| dir.join(program).is_file())
+        .map(|dir| dir.to_path_buf())
+}
+
+/// A `node.exe` that can run the shim's script.
+#[cfg(windows)]
+fn find_node_exe(shim_dir: &std::path::Path) -> Option<PathBuf> {
+    // nvm-windows and the official installer put node.exe in the same
+    // directory as the global npm shims, which is the first place the shim
+    // itself looks.
+    let beside = shim_dir.join("node.exe");
+    if beside.is_file() {
+        return Some(beside);
+    }
+    std::env::var("PATH")
+        .ok()?
+        .split(PATH_SEPARATOR)
+        .filter(|dir| !dir.is_empty())
+        .map(|dir| std::path::Path::new(dir).join("node.exe"))
+        .find(|candidate| candidate.is_file())
+}
+
+/// Node plus the script to hand it, when Claude is installed as a batch shim.
+///
+/// Rust refuses to build a command line for a `.cmd`/`.bat` program if any
+/// argument contains a newline: the spawn fails with "batch file arguments are
+/// invalid" and nothing starts. Every agent system prompt is multi-line (and
+/// the Tester's is ~30 KB), so every agent run through the npm `claude.cmd`
+/// died there in 0.00s - as does any chat prompt typed across more than one
+/// line. cmd.exe would also truncate at its 8191-character command line limit
+/// and expand any `%VAR%` inside the prompt.
+///
+/// The shim exists only to call `node cli.js`, so call that directly and none
+/// of the above applies - CreateProcess passes arguments through verbatim.
+#[cfg(windows)]
+fn node_launcher(program: &str) -> Option<(PathBuf, PathBuf)> {
+    if !is_batch_shim(program) {
+        return None;
+    }
+    let dir = program_directory(program)?;
+    let shim = dir.join(std::path::Path::new(program).file_name()?);
+    let script = std::fs::read_to_string(&shim)
+        .ok()
+        .and_then(|text| js_entries_in_shim(&text, &dir).into_iter().find(|p| p.is_file()))
+        .or_else(|| {
+            // A shim that does not spell the path out the usual way still has
+            // the package in one of the two standard places.
+            [
+                "node_modules/@anthropic-ai/claude-code/cli.js",
+                "../node_modules/@anthropic-ai/claude-code/cli.js",
+            ]
+            .iter()
+            .map(|rel| dir.join(rel))
+            .find(|p| p.is_file())
+        })?;
+    let node = find_node_exe(&dir)?;
+    Some((node, script))
+}
+
+#[cfg(not(windows))]
+fn node_launcher(_program: &str) -> Option<(PathBuf, PathBuf)> {
+    None
+}
+
 /// Whether this environment variable should reach the child process.
 ///
 /// The child is Claude Code, which needs to find Node, its own config, and the
@@ -768,7 +897,31 @@ fn compare_versions(a: &str, b: &str) -> Ordering {
 /// on Windows produces a single unusable entry and silently breaks every
 /// lookup the child makes.
 pub fn create_command_with_env(program: &str) -> Command {
-    let mut cmd = command_for(program);
+    // On Windows an npm-installed Claude is a `.cmd` shim, which cannot be
+    // given multi-line arguments at all - see `node_launcher`.
+    let launcher = node_launcher(program);
+    let mut cmd = match &launcher {
+        Some((node, script)) => {
+            info!(
+                "Starting Claude as `{} {}` instead of through {} - a batch shim cannot carry multi-line arguments",
+                node.display(),
+                script.display(),
+                program
+            );
+            let mut cmd = command_for(&node.to_string_lossy());
+            cmd.arg(script);
+            cmd
+        }
+        None => {
+            if is_batch_shim(program) {
+                warn!(
+                    "Could not resolve {} to `node cli.js`; multi-line arguments (every agent system prompt) will fail to spawn",
+                    program
+                );
+            }
+            command_for(program)
+        }
+    };
 
     info!("Creating command for: {}", program);
 
@@ -789,9 +942,17 @@ pub fn create_command_with_env(program: &str) -> Command {
     // lives in, so a version manager's `node` is found next to its `claude`,
     // plus the usual places a Unix GUI app cannot see.
     let mut wanted: Vec<String> = Vec::new();
-    if let Some(parent) = std::path::Path::new(program).parent() {
-        if !parent.as_os_str().is_empty() {
-            wanted.push(parent.to_string_lossy().to_string());
+    for dir in [
+        std::path::Path::new(program).parent(),
+        // When Node is started directly its own directory has to be on PATH
+        // too, or the child cannot spawn `node`/`npm` for itself.
+        launcher.as_ref().and_then(|(node, _)| node.parent()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !dir.as_os_str().is_empty() {
+            wanted.push(dir.to_string_lossy().to_string());
         }
     }
     #[cfg(not(windows))]
@@ -843,6 +1004,61 @@ mod tests {
     fn extensions_match_however_they_are_cased() {
         assert!(has_launchable_extension(r"C:\bin\CLAUDE.CMD", PATHEXT));
         assert!(has_launchable_extension(r"C:\bin\claude.Exe", ".com;.exe"));
+    }
+
+    /// Verbatim `%APPDATA%\npm\claude.cmd` from `npm i -g
+    /// @anthropic-ai/claude-code`.
+    const NPM_SHIM: &str = concat!(
+        "@ECHO off\r\n",
+        "GOTO start\r\n",
+        ":find_dp0\r\n",
+        "SET dp0=%~dp0\r\n",
+        "EXIT /b\r\n",
+        ":start\r\n",
+        "SETLOCAL\r\n",
+        "CALL :find_dp0\r\n",
+        "IF EXIST \"%dp0%\\node.exe\" (\r\n",
+        "  SET \"_prog=%dp0%\\node.exe\"\r\n",
+        ") ELSE (\r\n",
+        "  SET \"_prog=node\"\r\n",
+        "  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n",
+        ")\r\n",
+        "endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & ",
+        "\"%_prog%\"  \"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\r\n",
+    );
+
+    #[test]
+    fn the_npm_shim_gives_up_the_script_it_would_have_run() {
+        let dir = std::path::Path::new("C:\\Users\\x\\AppData\\Roaming\\npm");
+        let entries = js_entries_in_shim(NPM_SHIM, dir);
+        assert_eq!(
+            entries,
+            vec![dir.join("node_modules/@anthropic-ai/claude-code/cli.js")]
+        );
+    }
+
+    #[test]
+    fn a_shim_pointing_somewhere_else_entirely_is_left_where_it_points() {
+        let dir = std::path::Path::new("C:\\tools");
+        let entries = js_entries_in_shim(
+            "@\"%_prog%\" \"C:\\other\\claude-code\\cli.js\" %*",
+            dir,
+        );
+        assert_eq!(entries, vec![PathBuf::from("C:\\other\\claude-code\\cli.js")]);
+    }
+
+    #[test]
+    fn only_batch_programs_go_looking_for_node() {
+        assert!(is_batch_shim("C:\\npm\\claude.cmd"));
+        assert!(is_batch_shim("C:\\npm\\CLAUDE.CMD"));
+        assert!(is_batch_shim("claude.bat"));
+        assert!(!is_batch_shim("C:\\npm\\claude.exe"));
+        assert!(!is_batch_shim("/usr/local/bin/claude"));
+    }
+
+    #[test]
+    fn a_shim_with_no_script_in_it_yields_nothing_to_run() {
+        assert!(js_entries_in_shim("@echo off\r\nnode --version\r\n", std::path::Path::new("C:\\npm")).is_empty());
     }
 
     #[test]

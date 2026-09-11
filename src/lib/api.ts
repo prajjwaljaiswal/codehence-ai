@@ -737,6 +737,37 @@ export interface AgentQuestion {
   question: string;
   /** Choices to pick between. Empty when the answer is free text. */
   options: string[];
+  /**
+   * The question reached Slack, so the app must not also raise it: the answer
+   * is expected as a reply in the Slack thread.
+   */
+  asked_on_slack: boolean;
+  /** Channel it went to, when it went to one. */
+  slack_channel: string | null;
+  /** Why it did not, when Slack is set up but the post failed. */
+  slack_error: string | null;
+}
+
+/** Emitted once a waiting run has its answer, from wherever it came. */
+export interface QuestionAnswered {
+  run_id: number;
+  answer: string;
+  via: "app" | "slack";
+}
+
+/** Where agent questions and run outcomes are posted. */
+export interface SlackSettings {
+  enabled: boolean;
+  /**
+   * Bot token (`xoxb-...`). Needs `chat:write` to post and
+   * `channels:history` - `groups:history` for a private channel - so the
+   * reply can be read back.
+   */
+  bot_token: string;
+  /** Channel name (with or without the `#`) or channel id. */
+  channel: string;
+  /** Also post when a run finishes or fails. Those want no answer. */
+  notify_runs: boolean;
 }
 
 /** How a module of work is getting on. */
@@ -1048,6 +1079,23 @@ export const api = {
    */
   async answerWorkflowQuestion(runId: number, answer: string): Promise<void> {
     return await apiCall<void>("answer_workflow_question", { runId, answer });
+  },
+
+  /** Reads the Slack settings, defaults included when nothing is saved yet. */
+  async getSlackSettings(): Promise<SlackSettings> {
+    return await apiCall<SlackSettings>("get_slack_settings");
+  },
+
+  async saveSlackSettings(settings: SlackSettings): Promise<void> {
+    return await apiCall<void>("save_slack_settings", { settings });
+  },
+
+  /**
+   * Posts a test message with the *saved* settings and confirms what happened.
+   * Save before testing, or the test checks the previous token.
+   */
+  async testSlackConnection(): Promise<string> {
+    return await apiCall<string>("test_slack_connection");
   },
 
   /**

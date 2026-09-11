@@ -19,6 +19,7 @@ import {
   EyeOff,
   GitMerge,
   Upload,
+  MessageSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +27,7 @@ import { cn } from "@/lib/utils";
 import {
   api,
   type AgentQuestion,
+  type QuestionAnswered,
   type Agent,
   type ModuleEvent,
   type BoardProject,
@@ -347,6 +349,12 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
   const [moduleStatus, setModuleStatus] = useState<ModuleEvent | null>(null);
   const [question, setQuestion] = useState<AgentQuestion | null>(null);
   const [questionOpen, setQuestionOpen] = useState(false);
+  /**
+   * A question that went to Slack instead of opening the dialog. Shown as a
+   * line on the board so the run does not look silently stuck to anyone who
+   * happens to be looking at the app.
+   */
+  const [askedOnSlack, setAskedOnSlack] = useState<AgentQuestion | null>(null);
 
   // Resolved from the live list rather than held as its own copy, so the panel
   // follows the ticket as a run moves it between columns.
@@ -478,8 +486,34 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
         (t) => t.workflow_run_id === e.payload.run_id
       );
       if (!mine) return;
+      // Delivered to Slack means the answer is expected there; opening the
+      // dialog as well would ask the same thing twice.
+      if (e.payload.asked_on_slack) {
+        setAskedOnSlack(e.payload);
+        return;
+      }
       setQuestion(e.payload);
       setQuestionOpen(true);
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // Answered from either side, so the board stops saying the run is waiting.
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    listen<QuestionAnswered>("workflow-question-answered", (e) => {
+      if (disposed) return;
+      setAskedOnSlack((q) => (q?.run_id === e.payload.run_id ? null : q));
+      setQuestion((q) => (q?.run_id === e.payload.run_id ? null : q));
     }).then((fn) => {
       if (disposed) fn();
       else unlisten = fn;
@@ -946,6 +980,34 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
       {error && (
         <div className="mx-6 mb-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
           {error}
+        </div>
+      )}
+
+      {askedOnSlack && (
+        <div className="mx-6 mb-3 flex items-start gap-2 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-sm text-violet-300">
+          <MessageSquare className="mt-0.5 h-4 w-4 shrink-0" />
+          <div className="min-w-0">
+            <p>
+              Run #{askedOnSlack.run_id} asked a question in{" "}
+              <span className="font-medium">
+                {askedOnSlack.slack_channel ?? "Slack"}
+              </span>
+              . Reply in that thread and the run carries on.
+            </p>
+            <p className="mt-0.5 truncate text-xs text-violet-300/70">
+              {askedOnSlack.question}
+            </p>
+          </div>
+          <button
+            onClick={() => {
+              // Set aside, not answered: the run is still waiting, and the
+              // Slack thread is still the place to answer it.
+              setAskedOnSlack(null);
+            }}
+            className="ml-auto shrink-0 text-xs text-violet-300/70 hover:text-violet-200"
+          >
+            Dismiss
+          </button>
         </div>
       )}
 

@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Loader2, HelpCircle } from "lucide-react";
+import { Loader2, HelpCircle, MessageSquare } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -114,6 +114,30 @@ export const AgentQuestionDialog: React.FC<AgentQuestionDialogProps> = ({
           />
 
           {error && <p className="text-sm text-red-400">{error}</p>}
+
+          {/*
+            This dialog only opens when the question could not be carried to
+            Slack, so it is the one place worth saying why - a run blocked on a
+            question nobody is in front of is exactly what Slack delivery is
+            for.
+          */}
+          {question.slack_error ? (
+            <p className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-400">
+              <MessageSquare className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                This could not be sent to Slack, so it is being asked here:{" "}
+                {question.slack_error}
+              </span>
+            </p>
+          ) : (
+            <p className="flex items-start gap-2 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+              <MessageSquare className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                Set Slack up in Settings → Slack and these questions come to
+                you there instead — reply in the thread and the run carries on.
+              </span>
+            </p>
+          )}
         </div>
 
         <DialogFooter>

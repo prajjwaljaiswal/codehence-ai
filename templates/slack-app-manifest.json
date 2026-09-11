@@ -1,0 +1,31 @@
+{
+  "display_information": {
+    "name": "opcode",
+    "description": "Carries agent questions out of opcode and brings the answer back from the thread.",
+    "background_color": "#1e1b2e"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "opcode",
+      "always_online": false
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "chat:write",
+        "channels:read",
+        "channels:manage",
+        "channels:join",
+        "channels:history",
+        "groups:read",
+        "groups:history"
+      ]
+    }
+  },
+  "settings": {
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

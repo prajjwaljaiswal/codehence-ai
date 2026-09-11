@@ -148,3 +148,36 @@ the same workbook comes back over HTTP:
 GET /api/test-report/download?project_path=/path/to/repo
 GET /api/test-report            # the same counts and warnings, as JSON
 ```
+
+# Slack app
+
+`slack-app-manifest.json` is the manifest for the Slack app behind Settings →
+Slack. Paste it into **Create New App → From an app manifest** at
+[api.slack.com/apps](https://api.slack.com/apps), pick the workspace, then
+**Install to Workspace** and copy the *Bot User OAuth Token* (`xoxb-…`) into
+opcode. That is the whole setup: the channel does not have to exist, and the
+bot does not have to be invited to it — opcode creates `#dotsquares-ai` on
+first use and joins it.
+
+Seven bot scopes, and each one is load-bearing:
+
+| Scope | Why |
+| --- | --- |
+| `chat:write` | Post the question, and acknowledge the answer in its thread. |
+| `channels:history` | Read the reply back out of the thread — this is what makes answering from Slack possible at all, rather than only being notified. |
+| `channels:read` | Find the channel by name, to tell "it already exists" from "it has to be created". |
+| `channels:manage` | Create the channel when it does not exist yet. |
+| `channels:join` | Join a channel that already exists but has never seen this bot. |
+| `groups:read`, `groups:history` | The same lookup and reading, for a **private** channel. Drop both if the channel is public. |
+
+Two things no scope can do:
+
+- **A private channel cannot be joined through the API.** If you point opcode at
+  one that already exists, invite the bot by hand (`/invite @opcode`) — creating
+  is only automatic for public channels.
+- **A workspace can forbid apps from creating channels.** Then opcode says so,
+  and the channel has to be made by hand once.
+
+There is no request URL, no event subscription and no socket mode, because
+opcode *polls* the thread rather than being pushed to — so the app needs no
+public endpoint, and nothing has to be running to receive a reply.

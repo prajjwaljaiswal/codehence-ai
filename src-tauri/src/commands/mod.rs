@@ -6,6 +6,7 @@ pub mod mcp;
 pub mod notifications;
 pub mod proxy;
 pub mod skills;
+pub mod slack;
 pub mod slash_commands;
 pub mod storage;
 pub mod test_report;

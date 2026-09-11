@@ -300,6 +300,9 @@ fn main() {
             // Prompt attachments
             commands::attachments::prepare_attachment,
             // Desktop notifications & app icon badge
+            commands::slack::get_slack_settings,
+            commands::slack::save_slack_settings,
+            commands::slack::test_slack_connection,
             commands::notifications::show_desktop_notification,
             commands::notifications::set_app_badge_count,
             // Skills

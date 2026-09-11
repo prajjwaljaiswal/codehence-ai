@@ -16,6 +16,7 @@
 use crate::claude_binary::{create_command_with_env, find_claude_binary};
 use crate::commands::agents::AgentDb;
 use crate::commands::git;
+use crate::commands::slack;
 use crate::commands::tickets;
 use log::{error, info, warn};
 use rusqlite::{params, Connection};
@@ -74,6 +75,23 @@ pub struct AgentQuestion {
     pub question: String,
     /// Choices to pick between. Empty when the answer is free text.
     pub options: Vec<String>,
+    /// True when the question reached Slack, and so must *not* also be raised
+    /// in the app: the answer is expected in the Slack thread.
+    pub asked_on_slack: bool,
+    /// Channel it went to, so the board can say where to answer.
+    pub slack_channel: Option<String>,
+    /// Set when Slack is configured but the post failed, so the board can say
+    /// why it is asking in the app after all.
+    pub slack_error: Option<String>,
+}
+
+/// Emitted once a waiting run has its answer, so anything showing the question
+/// can stop showing it. `via` is "app" or "slack".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuestionAnswered {
+    pub run_id: i64,
+    pub answer: String,
+    pub via: String,
 }
 
 /// Find the question an agent ended its turn with, if it did.
@@ -634,6 +652,7 @@ async fn run_agent_turn(
 async fn wait_for_answer(
     app: &AppHandle,
     run_id: i64,
+    task: &str,
     question: &str,
     options: &[String],
     cancel: &CancelRx,
@@ -649,20 +668,63 @@ async fn wait_for_answer(
         }
     }
 
+    // Slack first, because whether it worked decides what the app is told: a
+    // question that reached Slack must not also open a dialog nobody is sitting
+    // in front of to see.
+    let slack = slack::configured(app);
+    let mut slack_error = None;
+    let thread = match &slack {
+        Some(s) => match slack::ask(s, run_id, task, question, options).await {
+            Ok(posted) => {
+                info!("run {} asked its question in {}", run_id, s.channel_label());
+                Some(posted)
+            }
+            Err(e) => {
+                warn!("run {} could not ask its question on Slack: {}", run_id, e);
+                slack_error = Some(e);
+                None
+            }
+        },
+        None => None,
+    };
+
+    let channel = thread
+        .as_ref()
+        .and_then(|_| slack.as_ref())
+        .map(|s| s.channel_label());
+
+    // Either way the run is blocked, so say so outside the window - with where
+    // to answer, which is the only part that differs.
+    slack::notify_question(app, run_id, channel.as_deref());
+
     let payload = AgentQuestion {
         run_id,
         question: question.to_string(),
         options: options.to_vec(),
+        asked_on_slack: thread.is_some(),
+        slack_channel: channel,
+        slack_error,
     };
     let _ = app.emit(&format!("workflow-question:{}", run_id), &payload);
     // Also on the open channel, so the board can raise the question even when
     // nobody has the run's panel open.
     let _ = app.emit("workflow-question", &payload);
 
+    // Answering in the app still works while Slack is waiting: whichever
+    // arrives first wins, and the other is simply never read.
+    let from_slack = async {
+        match (&slack, &thread) {
+            (Some(s), Some(posted)) => slack::wait_for_reply(s, posted).await,
+            // Nothing to poll - park forever and let the other arms decide.
+            _ => std::future::pending().await,
+        }
+    };
+
     let answered = tokio::select! {
         biased;
         _ = stopped(cancel) => None,
-        answer = rx => answer.ok(),
+        answer = rx => answer.ok().map(|a| (a, "app")),
+        reply = from_slack => reply.map(|r| (slack::resolve_choice(&r, options), "slack")),
         _ = tokio::time::sleep(ANSWER_TIMEOUT) => {
             warn!("run {} gave up waiting for an answer", run_id);
             None
@@ -676,7 +738,24 @@ async fn wait_for_answer(
         waiting.remove(&run_id);
     }
 
-    answered
+    let (answer, via) = answered?;
+
+    if let (Some(s), Some(posted)) = (&slack, &thread) {
+        // Said in the thread either way: someone watching Slack should see the
+        // run move on even when the answer was typed into the app.
+        slack::acknowledge(s, posted, &answer).await;
+    }
+
+    let _ = app.emit(
+        "workflow-question-answered",
+        QuestionAnswered {
+            run_id,
+            answer: answer.clone(),
+            via: via.to_string(),
+        },
+    );
+
+    Some(answer)
 }
 
 /// Prompt used when a test run comes back red.
@@ -894,7 +973,8 @@ pub async fn run_workflow(
 
             say(Phase::Waiting, iteration, &question, None);
 
-            let Some(answer) = wait_for_answer(&app, run_id, &question, &options, &cancel).await
+            let Some(answer) =
+                wait_for_answer(&app, run_id, &cfg.task, &question, &options, &cancel).await
             else {
                 if !*cancel.borrow() {
                     let e = "No answer was given, so the run could not go on.".to_string();
@@ -1471,7 +1551,39 @@ async fn run_ticket_on_main(
         }
     }
 
+    let (phase, message) = outcome_summary(&result);
+    notify_outcome(app, run_id, &ticket.title, phase, &message).await;
+
     committed
+}
+
+/// How a finished run reads: its terminal phase and a line saying what happened.
+fn outcome_summary(result: &Result<WorkflowOutcome, String>) -> (Phase, String) {
+    match result {
+        Ok(o) if o.cancelled => (
+            Phase::Cancelled,
+            format!("Stopped after {} iteration(s)", o.iterations_used),
+        ),
+        Ok(o) if o.error.is_none() && o.commit_sha.is_some() => (
+            Phase::Done,
+            format!(
+                "Finished in {} iteration(s) ({})",
+                o.iterations_used,
+                if o.tests_passed {
+                    "tests passed"
+                } else {
+                    "tests not verified"
+                }
+            ),
+        ),
+        Ok(o) => (
+            Phase::Failed,
+            o.error
+                .clone()
+                .unwrap_or_else(|| "Run produced no commit".to_string()),
+        ),
+        Err(e) => (Phase::Failed, e.clone()),
+    }
 }
 
 /// An agent's system prompt and model, by id.
@@ -2107,10 +2219,12 @@ fn begin_run(
                 phase,
                 iteration,
                 max_iterations,
-                message,
+                message: message.clone(),
                 ok: Some(phase == Phase::Done),
             },
         );
+
+        notify_outcome(&app_bg, run_id, &task, phase, &message).await;
 
         // Only a run started on its own moves the queue on. A module's tickets
         // are finished with as a group, so chaining from each of them would
@@ -2207,6 +2321,31 @@ fn salvage_interrupted_work(project_path: &str, branch: Option<&str>) {
 fn refund_attempt(db_path: &Path, run_id: i64) -> Result<(), String> {
     let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
     tickets::refund_attempt(&conn, run_id)
+}
+
+/// Post a run's outcome to Slack, when run notices are turned on.
+///
+/// One line, no thread: nothing is expected back, so unlike a question this
+/// never holds anything up. Called after the outcome is persisted, for the
+/// same reason the terminal event is - the message should describe the state
+/// the run actually left behind.
+async fn notify_outcome(app: &AppHandle, run_id: i64, task: &str, phase: Phase, message: &str) {
+    let mark = match phase {
+        Phase::Done => "✅",
+        Phase::Cancelled => "⏹",
+        _ => "❌",
+    };
+    slack::notify_run(
+        app,
+        format!(
+            "{} *opcode* · run #{} — {}\n{}",
+            mark,
+            run_id,
+            slack::task_title(task),
+            message
+        ),
+    )
+    .await;
 }
 
 /// Write the terminal state of a run back to the database.
