@@ -1511,11 +1511,11 @@ mod tests {
 
     #[test]
     fn board_names_come_from_the_directory() {
-        assert_eq!(board_name_from_path("/Users/me/Projects/opcode"), "opcode");
+        assert_eq!(board_name_from_path("/Users/me/Projects/dotsquares-ai"), "dotsquares-ai");
         // A trailing separator must not name the board after nothing.
-        assert_eq!(board_name_from_path("/Users/me/Projects/opcode/"), "opcode");
+        assert_eq!(board_name_from_path("/Users/me/Projects/dotsquares-ai/"), "dotsquares-ai");
         assert_eq!(board_name_from_path("C:\\work\\app"), "app");
-        assert_eq!(board_name_from_path("opcode"), "opcode");
+        assert_eq!(board_name_from_path("dotsquares-ai"), "dotsquares-ai");
     }
 
     #[test]
@@ -2311,7 +2311,7 @@ mod tests {
             &conn,
             7,
             true,
-            Some("opcode/build-results-grid-7"),
+            Some("dotsquares-ai/build-results-grid-7"),
             Some("https://github.com/acme/repo/pull/72"),
         )
         .unwrap();
@@ -2332,7 +2332,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(status, "completed");
-        assert_eq!(branch, "opcode/build-results-grid-7");
+        assert_eq!(branch, "dotsquares-ai/build-results-grid-7");
         assert_eq!(pr_num, 72);
         assert_eq!(pr_state, "open");
         assert!(completed.is_some(), "completed_at should be stamped");
@@ -2344,7 +2344,7 @@ mod tests {
         let id = add_ticket(&conn, "Build booking wizard", "approved");
         link_run(&conn, id, 8).unwrap();
 
-        apply_run_result(&conn, 8, false, Some("opcode/wizard-8"), None).unwrap();
+        apply_run_result(&conn, 8, false, Some("dotsquares-ai/wizard-8"), None).unwrap();
 
         assert_eq!(status_of(&conn, id), "approved");
         let completed: Option<String> = conn

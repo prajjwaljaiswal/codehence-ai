@@ -7,7 +7,9 @@ import { Switch } from "@/components/ui/switch";
 import { api, errorMessage, type SlackSettings as Settings } from "@/lib/api";
 
 interface SlackSettingsProps {
-  setToast: (toast: { message: string; type: "success" | "error" } | null) => void;
+  setToast: (
+    toast: { message: string; type: "success" | "error" } | null,
+  ) => void;
 }
 
 const BLANK: Settings = {
@@ -87,8 +89,8 @@ export function SlackSettings({ setToast }: SlackSettingsProps) {
         <p className="text-sm text-muted-foreground">
           When an agent stops to ask something, the question goes to Slack and
           the reply in its thread is the answer — so a run can be unblocked
-          without opcode in front of you. While this is on, the question is not
-          also raised in the app.
+          without dotsquares-ai in front of you. While this is on, the question
+          is not also raised in the app.
         </p>
       </div>
 
@@ -103,7 +105,9 @@ export function SlackSettings({ setToast }: SlackSettingsProps) {
           <Switch
             id="slack-enabled"
             checked={settings.enabled}
-            onCheckedChange={(enabled) => setSettings((s) => ({ ...s, enabled }))}
+            onCheckedChange={(enabled) =>
+              setSettings((s) => ({ ...s, enabled }))
+            }
           />
         </div>
 

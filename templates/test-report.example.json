@@ -1,6 +1,6 @@
 {
   "feature": "Ticket import from a spreadsheet",
-  "summary": "Importing tickets from .csv/.tsv/.xlsx into a project board: the preview, the row-level problem reporting, and what actually gets created. Covers the desktop shell and the phone browser served by opcode-web.",
+  "summary": "Importing tickets from .csv/.tsv/.xlsx into a project board: the preview, the row-level problem reporting, and what actually gets created. Covers the desktop shell and the phone browser served by dotsquares-ai-web.",
   "tested_by": "Tester agent",
   "generated_at": "2026-09-10",
   "branch": "feat/ticket-import",
@@ -24,7 +24,7 @@
       "os_version": "iOS 18.4",
       "browser": "Safari",
       "viewport": "375x667",
-      "notes": "opcode-web on the LAN. Narrowest phone still supported."
+      "notes": "dotsquares-ai-web on the LAN. Narrowest phone still supported."
     },
     {
       "platform": "Mobile web",
@@ -282,7 +282,7 @@
       "category": "Mobile",
       "priority": "P0",
       "platform": "iOS Safari",
-      "preconditions": "opcode-web reachable from the phone.",
+      "preconditions": "dotsquares-ai-web reachable from the phone.",
       "steps": [
         "Open the board on an iPhone SE",
         "Press Import",
@@ -489,7 +489,7 @@
       "priority": "P1",
       "status": "Open",
       "case_id": "TC-06",
-      "detected_by": "cargo test --bin opcode tickets::tests::unknown_priority_is_flagged",
+      "detected_by": "cargo test --bin dotsquares-ai tickets::tests::unknown_priority_is_flagged",
       "reproducibility": "Always",
       "platform": "Desktop",
       "environment": "Desktop / macOS 15.6",

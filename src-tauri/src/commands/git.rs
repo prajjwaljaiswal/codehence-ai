@@ -246,7 +246,7 @@ pub fn slugify(text: &str) -> String {
 pub fn build_branch_name(prefix: &str, task: &str, run_id: i64) -> String {
     let prefix = slugify(prefix);
     let prefix = if prefix.is_empty() {
-        "opcode".into()
+        "dotsquares-ai".into()
     } else {
         prefix
     };
@@ -703,7 +703,7 @@ pub fn ignore_paths(repo: &Path, paths: &[String]) -> Result<(), String> {
     if !text.is_empty() && !text.ends_with('\n') {
         text.push('\n');
     }
-    text.push_str("\n# Added by opcode: build output that would otherwise block every run\n");
+    text.push_str("\n# Added by dotsquares-ai: build output that would otherwise block every run\n");
     for path in paths {
         text.push_str(path);
         text.push('\n');
@@ -753,7 +753,7 @@ pub fn stash_working_tree(repo: &Path) -> Result<bool, String> {
             "push",
             "--include-untracked",
             "-m",
-            "opcode: set aside before an agent run",
+            "dotsquares-ai: set aside before an agent run",
         ],
     )?;
     if !ok {
@@ -874,8 +874,8 @@ mod tests {
 
     #[test]
     fn branch_name_includes_prefix_and_run_id() {
-        let name = build_branch_name("opcode", "Fix the login bug", 42);
-        assert_eq!(name, "opcode/fix-the-login-bug-42");
+        let name = build_branch_name("dotsquares-ai", "Fix the login bug", 42);
+        assert_eq!(name, "dotsquares-ai/fix-the-login-bug-42");
     }
 
     /// Build a throwaway repo with one commit on `main`.
@@ -939,8 +939,8 @@ mod tests {
         let dir = scratch_repo();
         let p = dir.path();
 
-        create_branch(p, "opcode/feature-1").unwrap();
-        assert_eq!(current_branch(p).unwrap(), "opcode/feature-1");
+        create_branch(p, "dotsquares-ai/feature-1").unwrap();
+        assert_eq!(current_branch(p).unwrap(), "dotsquares-ai/feature-1");
 
         // Nothing changed yet - that is not an error, just no commit.
         assert!(commit_all(p, "empty").unwrap().is_none());
@@ -956,10 +956,10 @@ mod tests {
         let dir = scratch_repo();
         let p = dir.path();
 
-        create_branch(p, "opcode/dup").unwrap();
+        create_branch(p, "dotsquares-ai/dup").unwrap();
         checkout(p, "main").unwrap();
 
-        let err = create_branch(p, "opcode/dup").unwrap_err();
+        let err = create_branch(p, "dotsquares-ai/dup").unwrap_err();
         assert!(err.contains("already exists"), "got: {err}");
     }
 
@@ -989,11 +989,11 @@ mod tests {
         )
         .unwrap();
 
-        create_branch(p, "opcode/pushes-1").unwrap();
+        create_branch(p, "dotsquares-ai/pushes-1").unwrap();
         std::fs::write(p.join("work.txt"), "done").unwrap();
         commit_all(p, "do the work").unwrap().expect("a commit");
 
-        push_branch(p, "opcode/pushes-1").expect("push should succeed");
+        push_branch(p, "dotsquares-ai/pushes-1").expect("push should succeed");
 
         // The remote really has the branch now.
         let refs = crate::claude_binary::command_for("git")
@@ -1003,7 +1003,7 @@ mod tests {
             .expect("list remote branches");
         let listed = String::from_utf8_lossy(&refs.stdout).to_string();
         assert!(
-            listed.contains("opcode/pushes-1"),
+            listed.contains("dotsquares-ai/pushes-1"),
             "remote branches: {listed}"
         );
     }
@@ -1024,16 +1024,16 @@ mod tests {
     /// Two branches that both edit the same line of the same file, guaranteed
     /// to conflict when merged either way.
     fn diverge_on_the_same_line(p: &Path) -> (&'static str, &'static str) {
-        create_branch(p, "opcode/mine").unwrap();
+        create_branch(p, "dotsquares-ai/mine").unwrap();
         std::fs::write(p.join("README.md"), "hello\nmine\n").unwrap();
         commit_all(p, "my change").unwrap();
 
         checkout(p, "main").unwrap();
-        create_branch(p, "opcode/theirs").unwrap();
+        create_branch(p, "dotsquares-ai/theirs").unwrap();
         std::fs::write(p.join("README.md"), "hello\ntheirs\n").unwrap();
         commit_all(p, "their change").unwrap();
 
-        ("opcode/mine", "opcode/theirs")
+        ("dotsquares-ai/mine", "dotsquares-ai/theirs")
     }
 
     #[test]
@@ -1041,12 +1041,12 @@ mod tests {
         use_a_test_git_identity();
         let dir = scratch_repo();
         let p = dir.path();
-        create_branch(p, "opcode/work").unwrap();
+        create_branch(p, "dotsquares-ai/work").unwrap();
         std::fs::write(p.join("feature.txt"), "done\n").unwrap();
         let sha = commit_all(p, "the work").unwrap().unwrap();
         checkout(p, "main").unwrap();
 
-        match try_merge(p, "main", "opcode/work").unwrap() {
+        match try_merge(p, "main", "dotsquares-ai/work").unwrap() {
             MergeAttempt::Merged(landed_at) => assert_eq!(landed_at, head_sha(p).unwrap()),
             MergeAttempt::Conflicted => panic!("should not have conflicted"),
         }
@@ -1134,16 +1134,16 @@ mod tests {
         use_a_test_git_identity();
         let dir = scratch_repo();
         let p = dir.path();
-        create_branch(p, "opcode/work-1").unwrap();
+        create_branch(p, "dotsquares-ai/work-1").unwrap();
         std::fs::write(p.join("feature.txt"), "done\n").unwrap();
         let work = commit_all(p, "the work").unwrap().unwrap();
 
-        merge_fast_forward(p, "main", "opcode/work-1").unwrap();
+        merge_fast_forward(p, "main", "dotsquares-ai/work-1").unwrap();
 
         assert_eq!(current_branch(p).unwrap(), "main");
         assert_eq!(head_sha(p).unwrap(), work, "main should be at the work");
         // The branch is left alone: its pull request and history still matter.
-        assert!(git(p, &["show-ref", "--verify", "refs/heads/opcode/work-1"]).is_ok());
+        assert!(git(p, &["show-ref", "--verify", "refs/heads/dotsquares-ai/work-1"]).is_ok());
     }
 
     #[test]
@@ -1151,7 +1151,7 @@ mod tests {
         use_a_test_git_identity();
         let dir = scratch_repo();
         let p = dir.path();
-        create_branch(p, "opcode/work-2").unwrap();
+        create_branch(p, "dotsquares-ai/work-2").unwrap();
         std::fs::write(p.join("feature.txt"), "done\n").unwrap();
         commit_all(p, "the work").unwrap();
 
@@ -1162,7 +1162,7 @@ mod tests {
         git(p, &["commit", "-am", "meanwhile"]).unwrap();
         let before = head_sha(p).unwrap();
 
-        let err = merge_fast_forward(p, "main", "opcode/work-2").unwrap_err();
+        let err = merge_fast_forward(p, "main", "dotsquares-ai/work-2").unwrap_err();
 
         assert!(err.contains("fast-forward"), "got: {err}");
         assert_eq!(head_sha(p).unwrap(), before, "main must be untouched");
@@ -1331,7 +1331,7 @@ mod tests {
         assert!(!is_dirty(p).unwrap());
         // Nothing is destroyed: the work is on the stash, ready to be popped.
         let list = git(p, &["stash", "list"]).unwrap();
-        assert!(list.contains("opcode: set aside"), "stash list: {list}");
+        assert!(list.contains("dotsquares-ai: set aside"), "stash list: {list}");
     }
 
     #[test]
@@ -1347,7 +1347,7 @@ mod tests {
     fn commit_waits_out_a_briefly_held_index_lock() {
         let dir = scratch_repo();
         let p = dir.path().to_path_buf();
-        create_branch(&p, "opcode/locked").unwrap();
+        create_branch(&p, "dotsquares-ai/locked").unwrap();
         std::fs::write(p.join("new.txt"), "work\n").unwrap();
 
         // Stand in for the agent's shell or the UI's diff holding the index for
@@ -1428,7 +1428,7 @@ mod tests {
         let dir = scratch_repo();
         let p = dir.path();
         let base = head_sha(p).unwrap();
-        create_branch(p, "opcode/diffs-1").unwrap();
+        create_branch(p, "dotsquares-ai/diffs-1").unwrap();
 
         std::fs::write(p.join("README.md"), "hello\nworld\n").unwrap();
         std::fs::write(p.join("new.txt"), "brand new\n").unwrap();
@@ -1447,13 +1447,13 @@ mod tests {
         let dir = scratch_repo();
         let p = dir.path();
         let base = head_sha(p).unwrap();
-        create_branch(p, "opcode/diffs-2").unwrap();
+        create_branch(p, "dotsquares-ai/diffs-2").unwrap();
 
         std::fs::write(p.join("README.md"), "hello\ncommitted\n").unwrap();
         commit_all(p, "the work").unwrap();
         std::fs::write(p.join("README.md"), "hello\ncommitted\nstray\n").unwrap();
 
-        let d = diff(p, &base, Some("opcode/diffs-2")).unwrap();
+        let d = diff(p, &base, Some("dotsquares-ai/diffs-2")).unwrap();
         assert!(d.patch.contains("+committed"), "patch: {}", d.patch);
         assert!(!d.patch.contains("stray"), "patch: {}", d.patch);
     }
@@ -1463,7 +1463,7 @@ mod tests {
         let dir = scratch_repo();
         let p = dir.path();
         let base = head_sha(p).unwrap();
-        create_branch(p, "opcode/diffs-3").unwrap();
+        create_branch(p, "dotsquares-ai/diffs-3").unwrap();
 
         let huge = "x".repeat(MAX_DIFF_BYTES + 10_000);
         std::fs::write(p.join("huge.txt"), format!("{}\n", huge)).unwrap();
@@ -1480,9 +1480,9 @@ mod tests {
     fn push_without_origin_is_a_clear_error() {
         let dir = scratch_repo();
         let p = dir.path();
-        create_branch(p, "opcode/no-remote").unwrap();
+        create_branch(p, "dotsquares-ai/no-remote").unwrap();
 
-        let err = push_branch(p, "opcode/no-remote").unwrap_err();
+        let err = push_branch(p, "dotsquares-ai/no-remote").unwrap_err();
         assert!(err.contains("no `origin` remote"), "got: {err}");
     }
 }

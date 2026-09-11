@@ -1,12 +1,12 @@
 {
   "display_information": {
-    "name": "opcode",
-    "description": "Carries agent questions out of opcode and brings the answer back from the thread.",
+    "name": "dotsquares-ai",
+    "description": "Carries agent questions out of dotsquares-ai and brings the answer back from the thread.",
     "background_color": "#1e1b2e"
   },
   "features": {
     "bot_user": {
-      "display_name": "opcode",
+      "display_name": "dotsquares-ai",
       "always_online": false
     }
   },

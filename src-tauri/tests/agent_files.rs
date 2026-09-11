@@ -18,7 +18,7 @@ fn agent_files() -> Vec<PathBuf> {
         .expect("cc_agents directory should exist")
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.to_string_lossy().ends_with(".opcode.json"))
+        .filter(|p| p.to_string_lossy().ends_with(".dotsquares-ai.json"))
         .collect();
     files.sort();
     files
@@ -256,7 +256,7 @@ fn the_development_team_is_present() {
 
 #[test]
 fn team_agents_share_the_handoff_contract() {
-    // The roles coordinate through files under .opcode/. If a prompt loses that
+    // The roles coordinate through files under .dotsquares-ai/. If a prompt loses that
     // section the agents stop being a team and become six unrelated bots.
     let team = [
         "Planner",
@@ -279,7 +279,7 @@ fn team_agents_share_the_handoff_contract() {
             path.display()
         );
         assert!(
-            parsed.agent.system_prompt.contains(".opcode/progress.md"),
+            parsed.agent.system_prompt.contains(".dotsquares-ai/progress.md"),
             "{} does not reference the shared progress file",
             path.display()
         );

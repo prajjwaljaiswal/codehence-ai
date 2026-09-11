@@ -274,7 +274,7 @@ async fn test_report_status_web(
 ///
 /// The desktop shell writes the file through a native save dialog, which a
 /// phone does not have: there, the only way to get the document off the machine
-/// running opcode is for the server to send the bytes and let the browser save
+/// running dotsquares-ai is for the server to send the bytes and let the browser save
 /// them. Same workbook, built by the same code - only the delivery differs.
 async fn download_test_report(Query(query): Query<ProjectQuery>) -> Response {
     match commands::test_report::export_test_report_bytes(&query.project_path) {
@@ -902,6 +902,6 @@ pub async fn create_web_server(port: u16) -> Result<(), Box<dyn std::error::Erro
 pub async fn start_web_mode(port: Option<u16>) -> Result<(), Box<dyn std::error::Error>> {
     let port = port.unwrap_or(8080);
 
-    println!("🚀 Starting Opcode in web server mode...");
+    println!("🚀 Starting Dotsquares-Ai in web server mode...");
     create_web_server(port).await
 }
