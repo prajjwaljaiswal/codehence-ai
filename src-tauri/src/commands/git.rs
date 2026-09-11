@@ -21,7 +21,7 @@ use std::time::Duration;
 /// to an SSH remote hangs and `gh` reports itself as logged out. Git gets its
 /// own env for that reason.
 fn git_env_command(program: &str, repo: &Path) -> Command {
-    let mut cmd = Command::new(program);
+    let mut cmd = crate::claude_binary::command_for(program);
     cmd.current_dir(repo);
 
     for (key, value) in std::env::vars() {
@@ -52,6 +52,7 @@ fn git_env_command(program: &str, repo: &Path) -> Command {
     // no terminal to answer on, so it would hang forever instead of erroring.
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     cmd.env("GIT_ASKPASS", "");
+    cmd.env("GIT_PAGER", "cat");
 
     // The UI inspects the repository - status, diff - while a run is writing to
     // it. Refreshing the index is an optional courtesy for those reads, but it
@@ -974,7 +975,7 @@ mod tests {
         let remote = tempfile::tempdir().expect("remote dir");
         // A bare repo is a perfectly real git remote - exercises the actual
         // push path without needing the network.
-        std::process::Command::new("git")
+        crate::claude_binary::command_for("git")
             .args(["init", "--bare", "--initial-branch=main"])
             .current_dir(remote.path())
             .output()
@@ -995,7 +996,7 @@ mod tests {
         push_branch(p, "dotsquares-ai/pushes-1").expect("push should succeed");
 
         // The remote really has the branch now.
-        let refs = std::process::Command::new("git")
+        let refs = crate::claude_binary::command_for("git")
             .args(["branch", "--list"])
             .current_dir(remote.path())
             .output()

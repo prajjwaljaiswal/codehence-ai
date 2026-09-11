@@ -1521,7 +1521,7 @@ pub async fn cleanup_finished_processes(db: State<'_, AgentDb>) -> Result<Vec<i6
         // Check if the process is still running
         let is_running = if cfg!(target_os = "windows") {
             // On Windows, use tasklist to check if process exists
-            match std::process::Command::new("tasklist")
+            match crate::claude_binary::command_for("tasklist")
                 .args(["/FI", &format!("PID eq {}", pid)])
                 .args(["/FO", "CSV"])
                 .output()
@@ -1875,7 +1875,10 @@ pub async fn list_claude_installations(
 /// and which environment variables Windows cannot start a process without.
 /// Two copies of that meant a fix to one silently missed this spawn path.
 fn create_command_with_env(program: &str) -> Command {
-    Command::from(crate::claude_binary::create_command_with_env(program))
+    let mut cmd = Command::from(crate::claude_binary::create_command_with_env(program));
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000);
+    cmd
 }
 
 /// Import an agent from JSON data

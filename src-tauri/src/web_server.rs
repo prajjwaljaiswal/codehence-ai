@@ -534,6 +534,8 @@ async fn execute_claude_command(
     // Create Claude command
     println!("[TRACE] Creating Claude command...");
     let mut cmd = Command::new(&claude_path);
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000);
     let args = [
         "-p",
         &prompt,
@@ -646,6 +648,8 @@ async fn continue_claude_command(
 
     // Create continue command
     let mut cmd = Command::new(&claude_path);
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000);
     cmd.args([
         "-c", // Continue flag
         "-p",
@@ -733,6 +737,8 @@ async fn resume_claude_command(
     // Create resume command
     println!("[resume_claude_command] Creating command...");
     let mut cmd = Command::new(&claude_path);
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000);
     let args = [
         "--resume",
         &claude_session_id,

@@ -366,7 +366,7 @@ impl ProcessRegistry {
         info!("Attempting to kill process {} by PID {}", run_id, pid);
 
         let kill_result = if cfg!(target_os = "windows") {
-            std::process::Command::new("taskkill")
+            crate::claude_binary::command_for("taskkill")
                 .args(["/F", "/PID", &pid.to_string()])
                 .output()
         } else {

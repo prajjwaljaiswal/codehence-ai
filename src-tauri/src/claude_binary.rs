@@ -93,17 +93,33 @@ fn expand_shim_path(token: &str, shim_dir: &std::path::Path) -> PathBuf {
     }
 }
 
-/// The `.js` entry points a Windows batch shim could be handing to Node.
+/// The native `.exe` entries a Windows batch shim could be invoking (excluding node.exe).
+#[cfg_attr(all(not(windows), not(test)), allow(dead_code))]
+fn exe_entries_in_shim(shim_text: &str, shim_dir: &std::path::Path) -> Vec<PathBuf> {
+    shim_text
+        .split(['"', '\'', ' ', '\t', '\r', '\n'])
+        .map(str::trim)
+        .filter(|token| {
+            let lower = token.to_ascii_lowercase();
+            lower.ends_with(".exe") && !lower.ends_with("node.exe")
+        })
+        .map(|token| expand_shim_path(token, shim_dir))
+        .collect()
+}
+
+/// The `.js`, `.cjs`, `.mjs` entry points a Windows batch shim could be handing to Node.
 ///
-/// npm, yarn and pnpm all write the same shape of `.cmd` shim, ending in a
-/// line like `"%_prog%" "%dp0%\node_modules\@anthropic-ai\claude-code\cli.js"
-/// %*`. Pulling that path back out lets Node be started with it directly.
+/// Older npm, yarn and pnpm wrote `.cmd` shims ending in a line like
+/// `"%_prog%" "%dp0%\node_modules\@anthropic-ai\claude-code\cli.js" %*`.
 #[cfg_attr(all(not(windows), not(test)), allow(dead_code))]
 fn js_entries_in_shim(shim_text: &str, shim_dir: &std::path::Path) -> Vec<PathBuf> {
     shim_text
         .split(['"', '\'', ' ', '\t', '\r', '\n'])
         .map(str::trim)
-        .filter(|token| token.to_ascii_lowercase().ends_with(".js"))
+        .filter(|token| {
+            let lower = token.to_ascii_lowercase();
+            lower.ends_with(".js") || lower.ends_with(".cjs") || lower.ends_with(".mjs")
+        })
         .map(|token| expand_shim_path(token, shim_dir))
         .collect()
 }
@@ -145,43 +161,102 @@ fn find_node_exe(shim_dir: &std::path::Path) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-/// Node plus the script to hand it, when Claude is installed as a batch shim.
+/// The resolved underlying program when Claude is installed as a batch shim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShimTarget {
+    /// A native binary executable (e.g. `claude.exe` bundled inside npm package).
+    Binary(PathBuf),
+    /// A Node runtime and JavaScript script (e.g. `node.exe cli.js`).
+    NodeScript { node: PathBuf, script: PathBuf },
+}
+
+impl ShimTarget {
+    pub fn runtime_dir(&self) -> Option<&std::path::Path> {
+        match self {
+            ShimTarget::Binary(exe) => exe.parent(),
+            ShimTarget::NodeScript { node, .. } => node.parent(),
+        }
+    }
+}
+
+/// Resolves a batch shim (`.cmd`/`.bat`) to either a native binary or a `node <script>` pair.
 ///
 /// Rust refuses to build a command line for a `.cmd`/`.bat` program if any
-/// argument contains a newline: the spawn fails with "batch file arguments are
-/// invalid" and nothing starts. Every agent system prompt is multi-line (and
-/// the Tester's is ~30 KB), so every agent run through the npm `claude.cmd`
-/// died there in 0.00s - as does any chat prompt typed across more than one
-/// line. cmd.exe would also truncate at its 8191-character command line limit
-/// and expand any `%VAR%` inside the prompt.
+/// argument contains a newline or invalid characters: the spawn fails with
+/// "batch file arguments are invalid" and nothing starts. Every agent system
+/// prompt is multi-line, so running through npm's `claude.cmd` fails unless resolved.
 ///
-/// The shim exists only to call `node cli.js`, so call that directly and none
-/// of the above applies - CreateProcess passes arguments through verbatim.
+/// Modern `@anthropic-ai/claude-code` installs ship a native `bin/claude.exe` that the shim calls.
+/// Calling that native binary or `node script.js` directly bypasses cmd.exe completely.
 #[cfg(windows)]
-fn node_launcher(program: &str) -> Option<(PathBuf, PathBuf)> {
+pub fn resolve_shim_target(program: &str) -> Option<ShimTarget> {
     if !is_batch_shim(program) {
         return None;
     }
     let dir = program_directory(program)?;
-    let shim = dir.join(std::path::Path::new(program).file_name()?);
-    let script = std::fs::read_to_string(&shim)
-        .ok()
-        .and_then(|text| js_entries_in_shim(&text, &dir).into_iter().find(|p| p.is_file()))
+    let shim_name = std::path::Path::new(program).file_name()?;
+    let shim = dir.join(shim_name);
+    let shim_text = std::fs::read_to_string(&shim).ok();
+
+    // 1. Look for native binary invocation inside the shim (e.g. claude.exe)
+    if let Some(text) = &shim_text {
+        if let Some(exe) = exe_entries_in_shim(text, &dir).into_iter().find(|p| p.is_file()) {
+            return Some(ShimTarget::Binary(exe));
+        }
+    }
+
+    // 2. Check standard native binary locations for @anthropic-ai/claude-code
+    let standard_binaries = [
+        "node_modules/@anthropic-ai/claude-code/bin/claude.exe",
+        "../node_modules/@anthropic-ai/claude-code/bin/claude.exe",
+    ];
+    for rel in standard_binaries {
+        let candidate = dir.join(rel);
+        if candidate.is_file() {
+            return Some(ShimTarget::Binary(candidate));
+        }
+    }
+
+    // 3. Look for JS script invocation in the shim (e.g. cli.js, cli-wrapper.cjs)
+    let script = shim_text
+        .as_deref()
+        .and_then(|text| js_entries_in_shim(text, &dir).into_iter().find(|p| p.is_file()))
         .or_else(|| {
-            // A shim that does not spell the path out the usual way still has
-            // the package in one of the two standard places.
             [
                 "node_modules/@anthropic-ai/claude-code/cli.js",
                 "../node_modules/@anthropic-ai/claude-code/cli.js",
+                "node_modules/@anthropic-ai/claude-code/cli-wrapper.cjs",
+                "../node_modules/@anthropic-ai/claude-code/cli-wrapper.cjs",
             ]
             .iter()
             .map(|rel| dir.join(rel))
             .find(|p| p.is_file())
-        })?;
-    let node = find_node_exe(&dir)?;
-    Some((node, script))
+        });
+
+    if let Some(script) = script {
+        if let Some(node) = find_node_exe(&dir) {
+            return Some(ShimTarget::NodeScript { node, script });
+        }
+    }
+
+    None
 }
 
+#[cfg(not(windows))]
+pub fn resolve_shim_target(_program: &str) -> Option<ShimTarget> {
+    None
+}
+
+#[allow(dead_code)]
+#[cfg(windows)]
+fn node_launcher(program: &str) -> Option<(PathBuf, PathBuf)> {
+    match resolve_shim_target(program) {
+        Some(ShimTarget::NodeScript { node, script }) => Some((node, script)),
+        _ => None,
+    }
+}
+
+#[allow(dead_code)]
 #[cfg(not(windows))]
 fn node_launcher(_program: &str) -> Option<(PathBuf, PathBuf)> {
     None
@@ -387,19 +462,20 @@ pub fn discover_claude_installations() -> Vec<ClaudeInstallation> {
 fn source_preference(installation: &ClaudeInstallation) -> u8 {
     match installation.source.as_str() {
         "which" => 1,
-        "homebrew" => 2,
-        "system" => 3,
-        "nvm-active" => 4,
-        source if source.starts_with("nvm") => 5,
-        "local-bin" => 6,
-        "claude-local" => 7,
-        "npm-global" => 8,
-        "yarn" | "yarn-global" => 9,
-        "bun" => 10,
-        "node-modules" => 11,
-        "home-bin" => 12,
-        "PATH" => 13,
-        _ => 14,
+        "npm-global-native" => 2,
+        "homebrew" => 3,
+        "system" => 4,
+        "nvm-active" => 5,
+        source if source.starts_with("nvm") => 6,
+        "local-bin" => 7,
+        "claude-local" => 8,
+        "npm-global" => 9,
+        "yarn" | "yarn-global" => 10,
+        "bun" => 11,
+        "node-modules" => 12,
+        "home-bin" => 13,
+        "PATH" => 14,
+        _ => 15,
     }
 }
 
@@ -474,7 +550,7 @@ fn try_which_command() -> Option<ClaudeInstallation> {
 fn try_which_command() -> Option<ClaudeInstallation> {
     debug!("Trying 'where claude' to find binary...");
 
-    match Command::new("where").arg("claude").output() {
+    match command_for("where").arg("claude").output() {
         Ok(output) if output.status.success() => {
             let output_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
@@ -496,7 +572,16 @@ fn try_which_command() -> Option<ClaudeInstallation> {
                 );
             }
 
-            let path = path?;
+            let mut path = path?;
+
+            // If `where` resolved to a batch shim (e.g. claude.cmd) that calls a native executable
+            // (e.g. claude.exe), prefer the native executable directly to avoid cmd.exe batch argument limits.
+            if let Some(ShimTarget::Binary(exe)) = resolve_shim_target(&path) {
+                if exe.is_file() {
+                    debug!("Unwrapping batch shim {} to native binary: {}", path, exe.display());
+                    path = exe.to_string_lossy().to_string();
+                }
+            }
 
             debug!("'where' found claude at: {}", path);
 
@@ -709,6 +794,10 @@ fn find_standard_installations() -> Vec<ClaudeInstallation> {
     if let Ok(user_profile) = std::env::var("USERPROFILE") {
         paths_to_check.extend(vec![
             (
+                format!("{}\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe", user_profile),
+                "npm-global-native".to_string(),
+            ),
+            (
                 format!("{}\\.claude\\local\\claude.exe", user_profile),
                 "claude-local".to_string(),
             ),
@@ -898,10 +987,18 @@ fn compare_versions(a: &str, b: &str) -> Ordering {
 /// lookup the child makes.
 pub fn create_command_with_env(program: &str) -> Command {
     // On Windows an npm-installed Claude is a `.cmd` shim, which cannot be
-    // given multi-line arguments at all - see `node_launcher`.
-    let launcher = node_launcher(program);
+    // given multi-line arguments at all - see `resolve_shim_target`.
+    let launcher = resolve_shim_target(program);
     let mut cmd = match &launcher {
-        Some((node, script)) => {
+        Some(ShimTarget::Binary(exe)) => {
+            info!(
+                "Starting Claude directly as native binary `{}` instead of batch shim {} - avoids batch argument limits",
+                exe.display(),
+                program
+            );
+            command_for(&exe.to_string_lossy())
+        }
+        Some(ShimTarget::NodeScript { node, script }) => {
             info!(
                 "Starting Claude as `{} {}` instead of through {} - a batch shim cannot carry multi-line arguments",
                 node.display(),
@@ -915,7 +1012,7 @@ pub fn create_command_with_env(program: &str) -> Command {
         None => {
             if is_batch_shim(program) {
                 warn!(
-                    "Could not resolve {} to `node cli.js`; multi-line arguments (every agent system prompt) will fail to spawn",
+                    "Could not resolve {} to native binary or `node script`; multi-line arguments (every agent system prompt) will fail to spawn",
                     program
                 );
             }
@@ -944,9 +1041,7 @@ pub fn create_command_with_env(program: &str) -> Command {
     let mut wanted: Vec<String> = Vec::new();
     for dir in [
         std::path::Path::new(program).parent(),
-        // When Node is started directly its own directory has to be on PATH
-        // too, or the child cannot spawn `node`/`npm` for itself.
-        launcher.as_ref().and_then(|(node, _)| node.parent()),
+        launcher.as_ref().and_then(|t| t.runtime_dir()),
     ]
     .into_iter()
     .flatten()
@@ -1034,6 +1129,28 @@ mod tests {
         assert_eq!(
             entries,
             vec![dir.join("node_modules/@anthropic-ai/claude-code/cli.js")]
+        );
+    }
+
+    const NPM_BINARY_SHIM: &str = concat!(
+        "@ECHO off\r\n",
+        "GOTO start\r\n",
+        ":find_dp0\r\n",
+        "SET dp0=%~dp0\r\n",
+        "EXIT /b\r\n",
+        ":start\r\n",
+        "SETLOCAL\r\n",
+        "CALL :find_dp0\r\n",
+        "\"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe\"   %*\r\n",
+    );
+
+    #[test]
+    fn the_npm_shim_gives_up_the_binary_it_would_have_run() {
+        let dir = std::path::Path::new("C:\\Users\\x\\AppData\\Roaming\\npm");
+        let entries = exe_entries_in_shim(NPM_BINARY_SHIM, dir);
+        assert_eq!(
+            entries,
+            vec![dir.join("node_modules/@anthropic-ai/claude-code/bin/claude.exe")]
         );
     }
 
