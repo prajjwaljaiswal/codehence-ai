@@ -219,10 +219,10 @@ pub async fn test_slack_connection(db: State<'_, AgentDb>) -> Result<String, Str
     }
 
     let who = auth_test(&settings).await?;
-    let posted = post(&settings, "opcode is connected to this channel.", None).await?;
+    let posted = post(&settings, "opcode is connected to this channel.").await?;
     // Reading the message back proves the history scope is there too - without
     // it questions would go out and no answer could ever be read.
-    let history = match fetch_replies(&settings, &posted.channel, &posted.ts).await {
+    let history = match fetch_thread_reply(&settings, &posted.channel, &posted.ts).await {
         Replies::Refused(e) => format!("\nReplies cannot be read yet: {}", e),
         _ => String::new(),
     };
@@ -365,6 +365,31 @@ fn forget_resolved() {
     if let Ok(mut cache) = resolved().lock() {
         cache.clear();
     }
+}
+
+/// The most recent question asked in each channel, by channel id.
+///
+/// Only that question is allowed to claim an answer typed into the channel
+/// instead of into a thread - see `fetch_answer`.
+static LATEST_QUESTION: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
+fn latest_question() -> &'static Mutex<HashMap<String, String>> {
+    LATEST_QUESTION.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn remember_question(posted: &Posted) {
+    if let Ok(mut latest) = latest_question().lock() {
+        latest.insert(posted.channel.clone(), posted.ts.clone());
+    }
+}
+
+fn is_latest_question(posted: &Posted) -> bool {
+    latest_question()
+        .lock()
+        .ok()
+        .and_then(|latest| latest.get(&posted.channel).cloned())
+        .map(|ts| ts == posted.ts)
+        .unwrap_or(false)
 }
 
 /// The channel id to post to, creating or joining the channel if that is what
@@ -513,17 +538,27 @@ pub struct Posted {
     pub ts: String,
 }
 
+/// Where a message goes.
+#[derive(Clone, Copy)]
+enum Destination<'a> {
+    /// Straight into the channel.
+    Channel,
+    /// A reply inside this thread. `broadcast` also shows it in the channel,
+    /// which an acknowledgement needs: whoever answered in the channel would
+    /// never see a thread they did not open.
+    Thread { ts: &'a str, broadcast: bool },
+}
+
 async fn post_once(
     s: &SlackSettings,
     channel: &str,
     text: &str,
-    thread_ts: Option<&str>,
+    to: Destination<'_>,
 ) -> Result<Posted, Failed> {
     let mut body = json!({ "channel": channel, "text": text });
-    if let Some(ts) = thread_ts {
+    if let Destination::Thread { ts, broadcast } = to {
         body["thread_ts"] = json!(ts);
-        // A threaded answer that also belongs in the channel would be noise.
-        body["reply_broadcast"] = json!(false);
+        body["reply_broadcast"] = json!(broadcast);
     }
 
     let reply = call(s, "chat.postMessage", Method::Post(body)).await?;
@@ -540,19 +575,22 @@ async fn post_once(
 }
 
 /// Post to the configured channel, setting it up first if it is not there yet.
-async fn post(s: &SlackSettings, text: &str, thread_ts: Option<&str>) -> Result<Posted, String> {
+async fn post(s: &SlackSettings, text: &str) -> Result<Posted, String> {
     let channel = channel_id(s).await?;
-    match post_once(s, &channel, text, thread_ts).await {
+    match post_once(s, &channel, text, Destination::Channel).await {
         Ok(posted) => Ok(posted),
         // The cached id has stopped being somewhere this bot can post - the
         // channel was deleted, archived, or the bot was removed from it. Work
         // it out again from scratch and try once more; a second failure is
         // reported rather than retried.
         Err(f) if f.is("channel_not_found") || f.is("not_in_channel") || f.is("is_archived") => {
-            warn!("Slack channel {} needs setting up again: {}", channel, f.message);
+            warn!(
+                "Slack channel {} needs setting up again: {}",
+                channel, f.message
+            );
             forget_resolved();
             let channel = channel_id(s).await?;
-            post_once(s, &channel, text, thread_ts)
+            post_once(s, &channel, text, Destination::Channel)
                 .await
                 .map_err(|f| f.message)
         }
@@ -573,7 +611,20 @@ enum Replies {
     Unreachable(String),
 }
 
-async fn fetch_replies(s: &SlackSettings, channel: &str, ts: &str) -> Replies {
+/// Whether a message is somebody's answer rather than one of ours.
+fn is_from_a_person(message: &Value) -> bool {
+    // A bot_id marks the question and its acknowledgements; a subtype marks
+    // joins, topic changes and the rest of the channel's furniture.
+    !message["bot_id"].is_string() && !message["subtype"].is_string()
+}
+
+fn answer_text(message: &Value) -> Option<String> {
+    let text = message["text"].as_str().unwrap_or("").trim();
+    (!text.is_empty()).then(|| text.to_string())
+}
+
+/// Look in the question's own thread. An answer here is unambiguous.
+async fn fetch_thread_reply(s: &SlackSettings, channel: &str, ts: &str) -> Replies {
     let query = vec![
         ("channel", channel.to_string()),
         ("ts", ts.to_string()),
@@ -585,22 +636,74 @@ async fn fetch_replies(s: &SlackSettings, channel: &str, ts: &str) -> Replies {
         Err(f) => return Replies::Refused(f.message),
     };
 
-    for message in body["messages"].as_array().into_iter().flatten() {
+    let empty = Vec::new();
+    for message in body["messages"].as_array().unwrap_or(&empty) {
         // The question itself is the first message in its own thread.
         if message["ts"].as_str() == Some(ts) {
             continue;
         }
-        // Anything the bot posted - the question, its acknowledgements - is not
-        // an answer to it.
-        if message["bot_id"].is_string() || message["subtype"].is_string() {
+        if !is_from_a_person(message) {
             continue;
         }
-        let text = message["text"].as_str().unwrap_or("").trim();
-        if !text.is_empty() {
-            return Replies::Answer(text.to_string());
+        if let Some(text) = answer_text(message) {
+            return Replies::Answer(text);
         }
     }
     Replies::Empty
+}
+
+/// Look in the channel itself, for an answer typed under the question rather
+/// than into its thread.
+///
+/// Slack only offers the thread if you go looking for it, so a plain channel
+/// message is what most people send - and reading only the thread left runs
+/// waiting next to an answer that was sitting right there.
+async fn fetch_channel_reply(s: &SlackSettings, posted: &Posted) -> Replies {
+    let query = vec![
+        ("channel", posted.channel.clone()),
+        // Exclusive, so the question itself is not read back as its own answer.
+        ("oldest", posted.ts.clone()),
+        ("inclusive", "false".to_string()),
+        ("limit", "50".to_string()),
+    ];
+    let body = match call(s, "conversations.history", Method::Get(query)).await {
+        Ok(body) => body,
+        Err(f) if f.code.is_none() => return Replies::Unreachable(f.message),
+        Err(f) => return Replies::Refused(f.message),
+    };
+
+    // Slack hands these back newest first, and the answer is the first thing
+    // said *after* the question - so the oldest of them.
+    let empty = Vec::new();
+    for message in body["messages"].as_array().unwrap_or(&empty).iter().rev() {
+        if message["ts"].as_str() == Some(posted.ts.as_str()) {
+            continue;
+        }
+        if !is_from_a_person(message) {
+            continue;
+        }
+        if let Some(text) = answer_text(message) {
+            return Replies::Answer(text);
+        }
+    }
+    Replies::Empty
+}
+
+/// One look for the answer to a question, in the thread and then the channel.
+async fn fetch_answer(s: &SlackSettings, posted: &Posted) -> Replies {
+    match fetch_thread_reply(s, &posted.channel, &posted.ts).await {
+        Replies::Empty => {}
+        found => return found,
+    }
+
+    // A message in the channel says nothing about which question it answers,
+    // so only the most recent question in that channel may claim one. Without
+    // this, two runs waiting at once would both take the same reply and one of
+    // them would carry on with an answer meant for the other.
+    if !is_latest_question(posted) {
+        return Replies::Empty;
+    }
+    fetch_channel_reply(s, posted).await
 }
 
 /// Send a question to Slack. `Ok` carries the thread its answer will arrive in.
@@ -618,24 +721,29 @@ pub async fn ask(
         question.replace('\n', "\n> ")
     );
     if options.is_empty() {
-        text.push_str("\nReply in this thread with the answer.");
+        text.push_str("\nReply here with the answer — in this thread or in the channel.");
     } else {
         text.push('\n');
         for (i, option) in options.iter().enumerate() {
             text.push_str(&format!("{}. {}\n", i + 1, option));
         }
-        text.push_str("\nReply in this thread with the number, or with the answer itself.");
+        text.push_str(
+            "\nReply here with the number, or with the answer itself — in this thread \
+             or in the channel.",
+        );
     }
 
-    post(s, &text, None).await
+    let posted = post(s, &text).await?;
+    remember_question(&posted);
+    Ok(posted)
 }
 
-/// Hold until somebody replies in the thread, or until reading it stops working.
+/// Hold until somebody answers in Slack, or until reading it stops working.
 pub async fn wait_for_reply(s: &SlackSettings, posted: &Posted) -> Option<String> {
     let mut failures = 0u32;
     loop {
         tokio::time::sleep(POLL_INTERVAL).await;
-        match fetch_replies(s, &posted.channel, &posted.ts).await {
+        match fetch_answer(s, posted).await {
             Replies::Answer(answer) => {
                 debug!("Slack answered the question on run thread {}", posted.ts);
                 return Some(answer);
@@ -677,8 +785,14 @@ pub fn resolve_choice(reply: &str, options: &[String]) -> String {
 pub async fn acknowledge(s: &SlackSettings, posted: &Posted, answer: &str) {
     let text = format!("Got it — carrying on with: {}", answer);
     // Straight to the thread it belongs in, rather than through `post`: the
-    // channel is plainly there, since the question is sitting in it.
-    if let Err(f) = post_once(s, &posted.channel, &text, Some(&posted.ts)).await {
+    // channel is plainly there, since the question is sitting in it. Broadcast,
+    // because an answer given in the channel came from someone who never opened
+    // the thread and would otherwise see no sign the run moved.
+    let to = Destination::Thread {
+        ts: &posted.ts,
+        broadcast: true,
+    };
+    if let Err(f) = post_once(s, &posted.channel, &text, to).await {
         warn!("could not acknowledge the Slack answer: {}", f.message);
     }
 }
@@ -691,7 +805,7 @@ pub async fn notify_run(app: &AppHandle, text: String) {
     if !s.notify_runs {
         return;
     }
-    if let Err(e) = post(&s, &text, None).await {
+    if let Err(e) = post(&s, &text).await {
         warn!("could not post the run notice to Slack: {}", e);
     }
 }
@@ -806,6 +920,48 @@ mod tests {
         assert!(s.usable());
         s.channel = "  ".into();
         assert!(!s.usable(), "no channel");
+    }
+
+    #[test]
+    fn only_the_newest_question_may_claim_a_channel_reply() {
+        // A channel of its own, so this does not fight other tests over the
+        // shared map.
+        let first = Posted {
+            channel: "CTESTONE".into(),
+            ts: "100.0".into(),
+        };
+        let second = Posted {
+            channel: "CTESTONE".into(),
+            ts: "200.0".into(),
+        };
+
+        remember_question(&first);
+        assert!(is_latest_question(&first));
+
+        remember_question(&second);
+        assert!(is_latest_question(&second));
+        assert!(
+            !is_latest_question(&first),
+            "an older question must not take a reply meant for the newer one"
+        );
+
+        // A channel nobody has asked anything in claims nothing.
+        assert!(!is_latest_question(&Posted {
+            channel: "CTESTTWO".into(),
+            ts: "100.0".into(),
+        }));
+    }
+
+    #[test]
+    fn our_own_messages_are_not_read_as_answers() {
+        assert!(is_from_a_person(&json!({ "text": "go with 1" })));
+        assert!(!is_from_a_person(&json!({ "text": "…", "bot_id": "B123" })));
+        assert!(!is_from_a_person(
+            &json!({ "text": "joined", "subtype": "channel_join" })
+        ));
+        assert_eq!(answer_text(&json!({ "text": "  1  " })), Some("1".into()));
+        assert_eq!(answer_text(&json!({ "text": "   " })), None);
+        assert_eq!(answer_text(&json!({})), None);
     }
 
     #[test]
