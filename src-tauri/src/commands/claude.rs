@@ -237,7 +237,10 @@ fn extract_first_user_message(jsonl_path: &PathBuf) -> (Option<String>, Option<S
 /// and which environment variables Windows cannot start a process without.
 /// Two copies of that meant a fix to one silently missed this spawn path.
 fn create_command_with_env(program: &str) -> Command {
-    Command::from(crate::claude_binary::create_command_with_env(program))
+    let mut cmd = Command::from(crate::claude_binary::create_command_with_env(program));
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000);
+    cmd
 }
 
 /// Creates a system binary command with the given arguments
@@ -551,7 +554,7 @@ pub async fn open_new_session(app: AppHandle, path: Option<String>) -> Result<St
 
     #[cfg(debug_assertions)]
     {
-        let mut cmd = std::process::Command::new(claude_path);
+        let mut cmd = crate::claude_binary::command_for(&claude_path);
 
         // If a path is provided, use it; otherwise use current directory
         if let Some(project_path) = path {
@@ -629,7 +632,7 @@ pub async fn check_claude_version(app: AppHandle) -> Result<ClaudeVersionStatus,
 
     #[cfg(debug_assertions)]
     {
-        let output = std::process::Command::new(claude_path)
+        let output = crate::claude_binary::command_for(&claude_path)
             .arg("--version")
             .output();
 
@@ -1043,7 +1046,7 @@ pub async fn cancel_claude_execution(
                     if let Some(pid) = pid {
                         log::info!("Attempting system kill as last resort for PID: {}", pid);
                         let kill_result = if cfg!(target_os = "windows") {
-                            std::process::Command::new("taskkill")
+                            crate::claude_binary::command_for("taskkill")
                                 .args(["/F", "/PID", &pid.to_string()])
                                 .output()
                         } else {
@@ -2139,7 +2142,7 @@ pub async fn validate_hook_command(command: String) -> Result<serde_json::Value,
     log::info!("Validating hook command syntax");
 
     // Validate syntax without executing
-    let mut cmd = std::process::Command::new("bash");
+    let mut cmd = crate::claude_binary::command_for("bash");
     cmd.arg("-n") // Syntax check only
         .arg("-c")
         .arg(&command);

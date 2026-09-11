@@ -376,6 +376,7 @@ async fn run_tests(repo: &Path, command: &str, cancel: &CancelRx) -> Result<Test
     #[cfg(windows)]
     let mut cmd = {
         let mut c = tokio::process::Command::new("cmd");
+        c.creation_flags(0x0800_0000);
         c.arg("/C").arg(command);
         c
     };
@@ -507,6 +508,8 @@ async fn run_agent_turn(
         .stdin(Stdio::null());
 
     let mut cmd = tokio::process::Command::from(cmd);
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000);
     cmd.kill_on_drop(true);
     let mut child = cmd
         .spawn()

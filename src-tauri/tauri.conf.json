@@ -6,7 +6,7 @@
   "identifier": "opcode.asterisk.so",
   "build": {
     "beforeDevCommand": "",
-    "beforeBuildCommand": "bun run build",
+    "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -62,7 +62,8 @@
       "rpm",
       "appimage",
       "app",
-      "dmg"
+      "dmg",
+      "nsis"
     ],
     "icon": [
       "icons/32x32.png",

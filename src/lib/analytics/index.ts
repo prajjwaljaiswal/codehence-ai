@@ -79,12 +79,14 @@ class AnalyticsService {
         opt_out_capturing_by_default: this.config.opt_out_capturing_by_default,
         loaded: (ph) => {
           // Set user properties
-          ph.identify(settings.userId, {
-            anonymous: true,
-            consent_date: settings.consentDate,
-            app_type: 'desktop',
-            app_name: 'opcode',
-          });
+          if (settings.userId) {
+            ph.identify(settings.userId, {
+              anonymous: true,
+              consent_date: settings.consentDate,
+              app_type: 'desktop',
+              app_name: 'opcode',
+            });
+          }
           
           // Set initial screen
           ph.capture('$screen', {
